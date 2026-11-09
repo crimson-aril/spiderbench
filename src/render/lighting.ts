@@ -368,7 +368,7 @@ function createNodeShadowRig(scene, quality) {
   sun.shadow.normalBias = 0.025;
   // Keep WebGPU shadows readable in narrow streets and soften the hard edge
   // from the single directional key light.
-  sun.shadow.intensity = 0.35;
+  sun.shadow.intensity = 0.05;
   sun.shadow.radius = 5.0;
   sun.shadow.autoUpdate = true;
   scene.add(sun, sun.target);
@@ -432,10 +432,10 @@ export function createLighting({ renderer, scene }) {
   const nodeAmbient = nodeBackend
     // TSL materials do not use the legacy surface shader's environment fill.
     // Balance direct sun with ambient and hemisphere sky/ground fill instead.
-    ? new THREE.AmbientLight(0xb8c4d8, 3.5)
+    ? new THREE.AmbientLight(0xb8c4d8, 5.0)
     : null;
   const nodeHemisphere = nodeBackend
-    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 5.0)
+    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 8.0)
     : null;
   if (nodeAmbient) scene.add(nodeAmbient);
   if (nodeHemisphere) scene.add(nodeHemisphere);
@@ -672,7 +672,7 @@ export function createLighting({ renderer, scene }) {
     // in shade. Keep the fill and shadow settings, and trim only the daytime
     // key to bring the sunlit reading closer to 4.4. WebGL and moonlight retain
     // their existing level.
-    sun.intensity = m * (webGPUBackend && !key.moon ? 0.74 : 1);
+    sun.intensity = m * (webGPUBackend && !key.moon ? 1.7 : 1);
     if (env) state.envDirty = true;
   }
 

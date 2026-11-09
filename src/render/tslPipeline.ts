@@ -79,7 +79,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   const requestedAmbientFill = query.has("tslfill") ? Number(query.get("tslfill")) : NaN;
   const nodeAmbientFillBase = Number.isFinite(requestedAmbientFill)
     ? Math.max(0, Math.min(4, requestedAmbientFill))
-    : 0.2;
+    : 1.0;
   const previousFogNode = scene.fogNode;
   const fogColorNode = uniform(lighting?.fog?.tint?.clone?.() ?? new Vector3(0.84, 0.9, 1));
   const fogStartNode = uniform(lighting?.fog?.startDistance ?? 35);
