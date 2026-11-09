@@ -142,7 +142,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   // environment-lighting chunk. Add a small albedo-based ambient and
   // side-facing fill to keep surfaces readable without a sky texture.
   const nodeAmbientFill = uniform(nodeAmbientFillBase);
-  const nodeVerticalFill = uniform(1.2);
+  const nodeVerticalFill = uniform(0.8);
   // Leave lightsNode unset on materials so WebGPURenderer's scene pass can
   // bind its own per-scene LightsNode. Manually assigning a second LightsNode
   // bypasses that render-list binding and can leave standard materials black.
@@ -923,7 +923,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       const night = Math.max(0, Math.min(1, lighting?.tod?.night ?? 0));
       // Keep the TSL diffuse-fill tuning live as the time-of-day changes.
       nodeAmbientFill.value = nodeAmbientFillBase * (1 - night * 0.3);
-      nodeVerticalFill.value = 1.2 * (1 - night);
+      nodeVerticalFill.value = 0.8 * (1 - night);
       lightingFallbackSync();
       saturationNode.value = grade.saturation;
       saturationKneeNode.value = grade.saturationKnee;

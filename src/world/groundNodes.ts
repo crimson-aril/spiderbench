@@ -14,7 +14,7 @@ export function createAsphaltNodeMaterial(T, quality) {
   // Dark asphalt albedo makes canyon shadows nearly black without the legacy
   // shader's sky irradiance. Give horizontal ground a little extra fallback
   // energy while keeping the shared fill low for walls and facades.
-  material.userData.webgpuAmbientFillScale = 3;
+  material.userData.webgpuAmbientFillScale = 2;
   const position = TSL.positionWorld;
   const p = worldXZ(position);
   const road = TSL.varying(TSL.attribute("aRoad", "vec3"), "vRoadNode");
@@ -77,7 +77,7 @@ export function createSidewalkNodeMaterial(T) {
     metalness: 0,
   });
   material.name = "CitySidewalk.TSL";
-  material.userData.webgpuAmbientFillScale = 3;
+  material.userData.webgpuAmbientFillScale = 2;
   const position = TSL.positionWorld;
   const p = worldXZ(position);
   const rect = TSL.varying(TSL.attribute("aRect", "vec4"), "vWalkRectNode");

@@ -368,8 +368,8 @@ function createNodeShadowRig(scene, quality) {
   sun.shadow.normalBias = 0.025;
   // Keep WebGPU shadows readable in narrow streets and soften the hard edge
   // from the single directional key light.
-  sun.shadow.intensity = 0.5;
-  sun.shadow.radius = 4.0;
+  sun.shadow.intensity = 0.35;
+  sun.shadow.radius = 5.0;
   sun.shadow.autoUpdate = true;
   scene.add(sun, sun.target);
 
@@ -432,10 +432,10 @@ export function createLighting({ renderer, scene }) {
   const nodeAmbient = nodeBackend
     // TSL materials do not use the legacy surface shader's environment fill.
     // Balance direct sun with ambient and hemisphere sky/ground fill instead.
-    ? new THREE.AmbientLight(0xb8c4d8, 2.7)
+    ? new THREE.AmbientLight(0xb8c4d8, 3.5)
     : null;
   const nodeHemisphere = nodeBackend
-    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 3.9)
+    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 5.0)
     : null;
   if (nodeAmbient) scene.add(nodeAmbient);
   if (nodeHemisphere) scene.add(nodeHemisphere);
@@ -639,8 +639,8 @@ export function createLighting({ renderer, scene }) {
       city.ts * cl,
     ); // (night) LED-mix warm white (was sodium 0.5 / 0.17)
     scene.environmentIntensity = state.envIntensity;
-    if (nodeAmbient) nodeAmbient.intensity = lerp(2.7, 0.5, night);
-    if (nodeHemisphere) nodeHemisphere.intensity = lerp(3.9, 0.9, night);
+    if (nodeAmbient) nodeAmbient.intensity = lerp(3.5, 0.8, night);
+    if (nodeHemisphere) nodeHemisphere.intensity = lerp(5.0, 1.2, night);
     applyNightMaterials();
   }
 
