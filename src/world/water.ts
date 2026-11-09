@@ -17,6 +17,8 @@ import * as THREE from "three";
 import { G, distToShore, LAND_POLY } from "./layout.ts";
 import { FAR_LANDS } from "./farshore.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createRiverNodeMaterial } from "./waterNodes.ts";
 
 export { REFL_LAYER };
 
@@ -30,6 +32,10 @@ export function createRiverMaterial(
   refl = null,
   { ssr = false, body = [0.06, 0.082, 0.09], shore = null } = {},
 ) {
+  if (usesNodeMaterialBackend()) {
+    return createRiverNodeMaterial(T, refl, { body, shore, ssr });
+  }
+
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.06,
@@ -245,7 +251,7 @@ function shoreMap() {
 }
 
 export function buildWater({ scene, T, renderer = null }) {
-  const mirror = renderer ? createMirror(renderer) : null;
+  const mirror = renderer && !usesNodeMaterialBackend() ? createMirror(renderer) : null;
   let shore = null;
   try {
     shore = shoreMap();

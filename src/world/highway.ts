@@ -12,6 +12,9 @@ import highwayShaderSource from "./shaders/glsl/highway.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { getQuality } from "../render/quality.ts";
 import * as THREE from "three";
+import { CURB_HEIGHT } from "./layoutConstants.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createHighwayNodeMaterial } from "./highwayNodes.ts";
 import {
   G,
   shoreX,
@@ -36,7 +39,7 @@ const highwayShader = lazyShaderSections(() => highwayShaderSource);
 
 export const HW = { INSET: 12.5, SH: 1.2, LANE: 3.5, MED: 3.0 };
 HW.W = HW.SH * 2 + HW.LANE * 6 + HW.MED; // 26.4 m
-const Y = G.CURB_H; // promenade / sidewalk top
+const Y = CURB_HEIGHT; // promenade / sidewalk top
 // (zfix) the road skin was coplanar with the promenade sidewalk (polygon offset only: with the reversed depth buffer three
 // flips the offset factor but not the units, so seen from above the pavement flickered through the asphalt). 1.5 cm up
 // (collision: flat at GY.WALK, within the 2 cm render tolerance).
@@ -126,6 +129,7 @@ export function highwayRuns() {
 }
 
 function createHighwayMaterial(T) {
+  if (usesNodeMaterialBackend()) return createHighwayNodeMaterial(T, HW);
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.9,

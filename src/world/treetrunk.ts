@@ -9,8 +9,11 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import treetrunkShaderSource from "./shaders/glsl/treetrunk.glsl?raw";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { mulberry32 } from "./layout.ts";
 
 const treetrunkShader = lazyShaderSections(() => treetrunkShaderSource);
@@ -456,6 +459,32 @@ export function barkTextures() {
 // per-instance aBark = (layer, tint r, g, b)
 export function barkMaterial() {
   const T = barkTextures();
+  if (usesNodeMaterialBackend()) {
+    const mat = new WEBGPU.MeshStandardNodeMaterial({
+      color: 0xffffff,
+      roughness: 0.93,
+      metalness: 0,
+    });
+    const bark = TSL.attribute("aBark", "vec4");
+    const layer = TSL.int(TSL.floor(bark.x.add(0.5)));
+    const colorTexture = TSL.texture(T.col.value, TSL.uv()).depth(layer);
+    const normalTexture = TSL.texture(T.nrm.value, TSL.uv()).depth(layer);
+    // The array textures are replaced after KTX2 decoding finishes. Keep the
+    // node bindings pointed at the decoded texture rather than the tiny fallback.
+    colorTexture.onRenderUpdate(() => {
+      colorTexture.value = T.col.value;
+    });
+    normalTexture.onRenderUpdate(() => {
+      normalTexture.value = T.nrm.value;
+    });
+    mat.colorNode = colorTexture.rgb.mul(bark.yzw).mul(TSL.attribute("color", "vec3"));
+    mat.normalNode = TSL.normalMap(
+      normalTexture.rgb,
+      TSL.vec2(1.35, 1.35),
+    );
+    mat.name = "TreeBark.TSL";
+    return mat;
+  }
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.93,

@@ -20,6 +20,9 @@ import { lazyShaderSections } from "../shaderSections.ts";
 import neonShaderSource from "./shaders/glsl/neon.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createPlaceholderTexture } from "../render/placeholderTexture.ts";
+import { createNeonTubeNodeMaterial, createNeonWordNodeMaterial } from "./neonNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import * as LAY from "./layout.ts";
@@ -252,18 +255,19 @@ function frameGeometry() {
   return g;
 }
 function tubeMaterial() {
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.22,
-    metalness: 0,
-    side: THREE.DoubleSide,
-  });
   const uni = {
     uNeonK: nightK,
     uNeonT: dnTime,
     uNeonS: screenK,
     uNeon: { value: new THREE.Vector4() },
   };
+  if (usesNodeMaterialBackend()) return createNeonTubeNodeMaterial(uni);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.22,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
   mat.userData.uni = uni;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uni);
@@ -292,7 +296,7 @@ function tubeMaterial() {
 
 // ------------------------------------------------------------------------------------------------ word mesh
 function wordMaterial() {
-  const uNeonTex = { value: new THREE.Texture() };
+  const uNeonTex = { value: createPlaceholderTexture([0, 0, 0, 255], "neon-words-loading") };
   loadKTX2TextureAsync(assetUrl("city/environmentTextures/neon_words.ktx2"))
     .then((tex) => {
       tex.colorSpace = THREE.NoColorSpace;
@@ -307,6 +311,7 @@ function wordMaterial() {
     uNeonTex,
     uNeonW: { value: new THREE.Vector4() },
   };
+  if (usesNodeMaterialBackend()) return createNeonWordNodeMaterial(uni);
   // additive colour, destination alpha kept: the HDR target's alpha carries the SSR weight (render/surface.ts); plain
   // additive blending raised it under the words and the shop glass there turned into a sky mirror
   const mat = new THREE.MeshBasicMaterial({

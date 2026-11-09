@@ -50,8 +50,8 @@ if(el < 0.0) {
 fragColor = vec4(skyLUT(normalize(vec3(dir.x, 0.012, dir.z))), 1.0);
 return;
 }
-// Keep the raymarch sample anchored to the pixel. Animated jitter made the cloud detail shimmer between frames.
-float j = ign(gl_FragCoord.xy);
+// Use the midpoint of each ray step. Per-pixel noise at half resolution showed up as speckled, crawling cloud edges.
+float j = 0.5;
 if(uStars > 0.0) sky += starField(dir) * uStars * smoothstep(0.0, 0.15, dir.y);
 vec4 ci = cirrusLayer(uCamPos, dir);
 sky = sky * ci.a + ci.rgb;

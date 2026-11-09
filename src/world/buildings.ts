@@ -8,6 +8,8 @@ import { lazyShaderSections } from "../shaderSections.ts";
 import buildingsShaderSource from "./shaders/glsl/buildings.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createBuildingDetailNodeMaterial } from "./buildingDetailNodes.ts";
 import {
   G,
   district,
@@ -6367,6 +6369,7 @@ function waterTower(D, S, Z, x, y, z, r, rnd) {
 // ------------------------------------------------------------------------------------------ detail material
 // Vertex-coloured roof/street hardware with per-part procedural surface response + world-space weathering.
 export function createDetailMaterial(T) {
+  if (usesNodeMaterialBackend()) return createBuildingDetailNodeMaterial(T);
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.75,

@@ -7,6 +7,8 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import boatsShaderSource from "./shaders/glsl/boats.glsl?raw";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createBoatWakeNodeMaterial } from "./boatNodes.ts";
 import { G, onLand, shoreX, mulberry32 } from "./layout.ts";
 import { farShoreHeight } from "./farshore.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
@@ -457,7 +459,9 @@ export function buildBoats({ scene, docks = [], solids = null }) {
     .rotateX(Math.PI / 2)
     .translate(0, 0, -0.5); // extends backwards (-z), bow (tex top) at z = 0
   // (round 11) wakes were oversized and glowing white (unlit basic material): dimmer foam value + lower opacity
-  const wakeMat = new THREE.MeshBasicMaterial({
+  const wakeMat = usesNodeMaterialBackend()
+    ? createBoatWakeNodeMaterial(wakeTexture())
+    : new THREE.MeshBasicMaterial({
     map: wakeTexture(),
     transparent: true,
     depthWrite: false,
@@ -467,7 +471,7 @@ export function buildBoats({ scene, docks = [], solids = null }) {
     side: THREE.DoubleSide,
   }); // (round 12: opacity 0.5 -> 0.7)
   // (night r11) unlit foam glowed as a white smear on the dark river at night (x4.5 night exposure): moonlit-foam level
-  wakeMat.onBeforeCompile = (sh) => {
+  if (!usesNodeMaterialBackend()) wakeMat.onBeforeCompile = (sh) => {
     sh.uniforms.uNightK = nightK;
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>",boatsShader.fragmentCommon)

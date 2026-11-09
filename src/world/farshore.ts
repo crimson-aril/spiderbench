@@ -22,6 +22,12 @@ import { bridgeSpans } from "./bridges.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
 import { CanopyBatch } from "./canopy.ts";
 import { farCoastOwns, COAST } from "./waterfront.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createFarLandNodeMaterial,
+  createFarMassNodeMaterial,
+  createPalisadesCliffNodeMaterial,
+} from "./farshoreNodes.ts";
 
 const farshoreShader = lazyShaderSections(() => farshoreShaderSource);
 // (coast r1) near banks rebuilt by waterfront.ts
@@ -3338,14 +3344,13 @@ export function buildFarShore({ scene, facadeMat, solids = null }) {
   mapTex.anisotropy = 8;
   mapTex.minFilter = THREE.LinearMipmapLinearFilter;
   mapTex.generateMipmaps = true;
-  const landMat = new THREE.MeshStandardMaterial({
-    map: mapTex,
-    roughness: 0.95,
-  });
+  const landMat = usesNodeMaterialBackend()
+    ? createFarLandNodeMaterial(mapTex)
+    : new THREE.MeshStandardMaterial({ map: mapTex, roughness: 0.95 });
   landMat.defines = { NO_CITYLIGHT: "" }; // (lighting2 r3) no Manhattan street-light fill on the far shores
   // beyond the baked map (and blended into its edge): procedural urban fabric (street grid, block tones, parks) that
   // averages out once sub-pixel, so the hinterland out to the horizon never reads as one flat slab
-  landMat.onBeforeCompile = (sh) => {
+  if (!usesNodeMaterialBackend()) landMat.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>",farshoreShader.vertexCommon)
       .replace(
@@ -3401,6 +3406,7 @@ export function buildFarShore({ scene, facadeMat, solids = null }) {
 // Palisades basalt: vertical columnar jointing (irregular column widths), horizontal ledges, rust / grey banding,
 // moss and scrub on ledges and toward the top, darker damp talus at the foot. World-space (no UVs needed).
 function createCliffMaterial() {
+  if (usesNodeMaterialBackend()) return createPalisadesCliffNodeMaterial(PAL_Y, FAR_Y);
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.93,
@@ -3426,6 +3432,7 @@ function createCliffMaterial() {
 
 // far massed blocks: vertex colour albedo; colour.b > 10 marks wall faces, which get a procedural floor / bay pattern
 function createMassMaterial() {
+  if (usesNodeMaterialBackend()) return createFarMassNodeMaterial();
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.85,

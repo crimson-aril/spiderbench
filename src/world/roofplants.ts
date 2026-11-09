@@ -7,8 +7,12 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import roofplantsShaderSource from "./shaders/glsl/roofplants.glsl?raw";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createPlaceholderTexture } from "../render/placeholderTexture.ts";
 import { Pool } from "./pool.ts";
 
 const roofplantsShader = lazyShaderSections(() => roofplantsShaderSource);
@@ -142,6 +146,35 @@ function grassGeometry() {
 }
 
 function plantMaterial(tex) {
+  if (usesNodeMaterialBackend()) {
+    const mat = new WEBGPU.MeshStandardNodeMaterial({
+      map: tex,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+      roughness: 0.85,
+      metalness: 0,
+    });
+    const plant = TSL.attribute("aPlant", "vec4");
+    const tile = TSL.floor(plant.x.add(0.5));
+    const baseTile = TSL.floor(plant.x.div(4).add(0.001));
+    const tileOffset = TSL.vec2(
+      TSL.mod(tile, 2).sub(TSL.mod(baseTile, 2)),
+      TSL.floor(tile.div(2)).sub(TSL.floor(baseTile.div(2))),
+    ).mul(0.5);
+    const mapNode = TSL.texture(tex, TSL.uv().add(tileOffset));
+    mapNode.onRenderUpdate(() => {
+      mapNode.value = mat.map;
+    });
+    const soilShade = TSL.mix(
+      0.55,
+      1,
+      TSL.smoothstep(0, 0.6, TSL.positionLocal.y),
+    );
+    mat.colorNode = mapNode.rgb.mul(plant.yzw).mul(soilShade);
+    mat.opacityNode = mapNode.a;
+    mat.name = "RoofPlants.TSL";
+    return mat;
+  }
   const mat = new THREE.MeshStandardMaterial({
     map: tex,
     alphaTest: 0.5,
@@ -192,7 +225,8 @@ export class RoofPlants {
   }
   build(scene) {
     if (!this.count) return;
-    const mat = plantMaterial(new THREE.Texture());
+    // Keep alpha-tested cards hidden until the asynchronous atlas is ready.
+    const mat = plantMaterial(createPlaceholderTexture([0, 0, 0, 0], "roof-plants-loading"));
     loadKTX2TextureAsync(assetUrl("city/environmentTextures/roofplants.ktx2"))
       .then((tex) => {
         tex.colorSpace = THREE.SRGBColorSpace;

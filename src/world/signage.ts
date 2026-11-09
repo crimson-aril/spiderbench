@@ -17,6 +17,8 @@ import { lazyShaderSections } from "../shaderSections.ts";
 import signageShaderSource from "./shaders/glsl/signage.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createSignageNodeMaterial } from "./signageNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { getLoadedKTX2Texture } from "../render/ktx2.ts";
 import * as LAY from "./layout.ts";
@@ -331,6 +333,7 @@ function loadTex(url) {
   return t;
 }
 function signMaterial(ads, signs, noise, ghost, art) {
+  if (usesNodeMaterialBackend()) return createSignageNodeMaterial(ads, signs, noise, art);
   const mat = new THREE.MeshStandardMaterial({
     map: ads,
     vertexColors: true,

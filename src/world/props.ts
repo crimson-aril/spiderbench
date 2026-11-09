@@ -4,7 +4,10 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import propsShaderSource from "./shaders/glsl/props.glsl?raw";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
 import { assetUrl } from "../assets.ts";
+import { interleaveVertexAttributes } from "../render/vertexPacking.ts";
 import {
   G,
   avenues,
@@ -38,6 +41,9 @@ import { screenK } from "../render/daynight.ts"; // (night r5)
 import { getQuality } from "../render/quality.ts";
 import { screenLightSet } from "./screenlights.ts"; // (night r9) billboard / lightbox faces light the street
 import { createPartMaterial, MATERIAL_PART } from "./partMaterials.ts";
+import { usesNodeMaterialBackend, usesWebGPUBackend } from "../render/backendState.ts";
+import { createSteamNodeMaterial } from "./steamNodes.ts";
+import { createTimesSquareBladeFaceNodeMaterial } from "./timesSquareNodes.ts";
 import { COAST } from "./waterfront.ts"; // (coast r1) waterfront lamps / benches / trees
 import {
   GC_KEEP_OUT,
@@ -1109,14 +1115,16 @@ function createSteam(T, vents, time) {
   attr.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute("aPuff", attr);
   geo.instanceCount = 0;
-  const mat = new THREE.MeshStandardMaterial({
+  const mat = usesNodeMaterialBackend()
+    ? createSteamNodeMaterial(T.noise, time)
+    : new THREE.MeshStandardMaterial({
     color: 0xcfd2d4,
     roughness: 1,
     transparent: true,
     depthWrite: false,
     alphaMap: T.noise,
   });
-  mat.onBeforeCompile = (sh) => {
+  if (!usesNodeMaterialBackend()) mat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = time;
     sh.vertexShader = sh.vertexShader
       .replace(
@@ -1327,7 +1335,7 @@ async function loadPropModels() {
       }
       g.applyMatrix4(o.matrixWorld);
       g.computeBoundingSphere();
-      geos[o.name] = g;
+      geos[o.name] = interleaveVertexAttributes(g);
     });
     return geos;
   } catch (e) {
@@ -3986,13 +3994,17 @@ function bladeFaces(scene, items) {
     }
   });
   geo.setAttribute("aCell", cellA);
-  const mat = new THREE.MeshStandardMaterial({
-    map: getSignAtlasTexture(),
-    roughness: 0.3,
-    metalness: 0,
-  });
+  const signAtlas = getSignAtlasTexture();
+  const nodeBackend = usesNodeMaterialBackend();
+  const mat = nodeBackend
+    ? createTimesSquareBladeFaceNodeMaterial(signAtlas)
+    : new THREE.MeshStandardMaterial({
+      map: signAtlas,
+      roughness: 0.3,
+      metalness: 0,
+    });
   const uni = { uScreenK: screenK, uNightK: nightK };
-  mat.onBeforeCompile = (sh) => {
+  if (!nodeBackend) mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uni);
     sh.vertexShader = sh.vertexShader
       .replace(
@@ -4088,37 +4100,57 @@ function billboardFaces(scene, items, ads) {
   geo.setAttribute("aGain", gainA);
   const tex = getAdvertisingAtlasTexture(); // (billboards r3) shared GPU copy (src/world/advertisingTextures.ts)
   void ads;
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex,
-    roughness: 0.6,
-    emissive: 0xffffff,
-    emissiveMap: tex,
-    emissiveIntensity: 0.06,
-  });
-  mat.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace(
-        "#include <common>",propsShader.vertexCommonByGain,
-      )
-      .replace(
-        "#include <fog_vertex>",propsShader.vertexFogVertex,
-      )
-      .replace(
-        "#include <uv_vertex>",propsShader.vertexUvVertexByEmissiveMapUv,
-      );
-    sh.uniforms.uNightK = nightK; // (night r9)
-    sh.fragmentShader = sh.fragmentShader
-      .replace(
-        "#include <common>",propsShader.fragmentCommonByGain,
-      )
-      .replace(
-        "#include <emissivemap_fragment>",propsShader.fragmentEmissiveByGain,
-      )
-      .replace(
-        "#include <map_fragment>",propsShader.fragmentMap,
-      );
-  };
-  mat.customProgramCacheKey = () => "city-ads-v3n";
+  let mat;
+  if (usesNodeMaterialBackend()) {
+    mat = new WEBGPU.MeshStandardNodeMaterial({ roughness: 0.6 });
+    mat.name = "CityAds.TSL";
+    const cellV = TSL.varying(TSL.attribute("aCell", "vec4"), "vAdCell");
+    const gainV = TSL.varying(TSL.attribute("aGain", "float"), "vAdGain");
+    const atlasUv = cellV.xy.add(TSL.uv().mul(cellV.zw));
+    const atlasColor = TSL.texture(tex, atlasUv).rgb;
+    const luma = TSL.dot(atlasColor, TSL.vec3(0.3, 0.55, 0.15));
+    const color = TSL.mix(atlasColor, TSL.vec3(luma), 0.18)
+      .mul(0.9)
+      .add(0.012);
+    const night = TSL.uniform(nightK.value);
+    night.onRenderUpdate(() => {
+      night.value = nightK.value;
+    });
+    mat.colorNode = color;
+    mat.emissiveNode = color.mul(TSL.mix(gainV, gainV.max(0.25), night));
+  } else {
+    mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.6,
+      emissive: 0xffffff,
+      emissiveMap: tex,
+      emissiveIntensity: 0.06,
+    });
+    mat.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace(
+          "#include <common>",propsShader.vertexCommonByGain,
+        )
+        .replace(
+          "#include <fog_vertex>",propsShader.vertexFogVertex,
+        )
+        .replace(
+          "#include <uv_vertex>",propsShader.vertexUvVertexByEmissiveMapUv,
+        );
+      sh.uniforms.uNightK = nightK; // (night r9)
+      sh.fragmentShader = sh.fragmentShader
+        .replace(
+          "#include <common>",propsShader.fragmentCommonByGain,
+        )
+        .replace(
+          "#include <emissivemap_fragment>",propsShader.fragmentEmissiveByGain,
+        )
+        .replace(
+          "#include <map_fragment>",propsShader.fragmentMap,
+        );
+    };
+    mat.customProgramCacheKey = () => "city-ads-v3n";
+  }
   const mesh = new THREE.InstancedMesh(geo, mat, items.length);
   const m = new THREE.Matrix4(),
     l = new THREE.Matrix4(),
@@ -4182,6 +4214,30 @@ function subwayPitMaterial() {
     instanceTint: true,
     instanceState: true,
   });
+  if (usesNodeMaterialBackend()) {
+    const instanceTransform = TSL.modelWorldMatrix.mul(TSL.referenceAttribute("instanceMatrix", "mat4"));
+    const cameraLocal = TSL.varying(
+      instanceTransform.inverse().mul(TSL.vec4(TSL.cameraPosition, 1)).xyz,
+      "vSubwayPitCameraLocal",
+    );
+    const localPosition = TSL.varying(TSL.positionGeometry, "vSubwayPitGeometryPosition");
+    const height = cameraLocal.y;
+    const denominator = height.sub(localPosition.y).max(1e-3);
+    const tA = height.sub(0.035).div(denominator);
+    const tB = height.sub(0.006).div(denominator);
+    const openingPoint = cameraLocal.add(localPosition.sub(cameraLocal).mul(tB));
+    m.maskNode = height.greaterThan(0.04)
+      .and(openingPoint.x.abs().lessThan(2.27))
+      .and(openingPoint.z.abs().lessThan(0.83));
+    const depthMix = localPosition.y.negate().div(4).clamp(0, 1);
+    const depthPosition = TSL.positionView.mul(TSL.mix(tA, tB, depthMix));
+    const clipPosition = TSL.cameraProjectionMatrix.mul(TSL.vec4(depthPosition, 1));
+    const projectedDepth = clipPosition.z.div(clipPosition.w);
+    m.depthNode = usesWebGPUBackend()
+      ? projectedDepth
+      : projectedDepth.mul(0.5).add(0.5);
+    return m;
+  }
   const base = m.onBeforeCompile;
   m.onBeforeCompile = (sh, r) => {
     base(sh, r);

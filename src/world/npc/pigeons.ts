@@ -5,6 +5,8 @@
 import { lazyShaderSections } from "../../shaderSections.ts";
 import pigeonsShaderSource from "./shaders/glsl/pigeons.glsl?raw";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../../render/backendState.ts";
+import { createPigeonNodeMaterial } from "./pigeonsNodes.ts";
 import { G, mulberry32, inPark, shoreX } from "../layout.ts";
 import { MeshBuilder } from "../meshBuilder.ts";
 
@@ -92,25 +94,24 @@ export function createPigeons({ scene, blocks, parkPaths }) {
   geo.setAttribute("iF", iF);
   geo.setAttribute("iT", iT);
   const uTime = { value: 0 };
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.8,
-    side: THREE.DoubleSide,
-  });
-  mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uTime = uTime;
-    sh.vertexShader = sh.vertexShader
-      .replace(
-        "#include <common>",pigeonsShader.vertexCommon,
-      )
-      .replace(
-        "#include <begin_vertex>",pigeonsShader.vertexBeginVertex,
-      )
-      .replace(
-        "#include <color_vertex>",pigeonsShader.vertexColorVertex,
-      );
-  };
-  mat.customProgramCacheKey = () => "city-pigeon-v1";
+  let mat;
+  if (usesNodeMaterialBackend()) {
+    mat = createPigeonNodeMaterial(uTime);
+  } else {
+    mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.8,
+      side: THREE.DoubleSide,
+    });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = uTime;
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", pigeonsShader.vertexCommon)
+        .replace("#include <begin_vertex>", pigeonsShader.vertexBeginVertex)
+        .replace("#include <color_vertex>", pigeonsShader.vertexColorVertex);
+    };
+    mat.customProgramCacheKey = () => "city-pigeon-v1";
+  }
   const mesh = new THREE.InstancedMesh(geo, mat, MAX);
   mesh.name = "pigeons";
   mesh.count = 0;

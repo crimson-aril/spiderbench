@@ -51,11 +51,11 @@ if(K == 0) {
 sgR = 0.5 + 0.3 * nzB.r;
 sgM = 0.35;
 diffuseColor.rgb *= 0.85 + 0.3 * nzA.g;
-} else if(K == 1) { // printed vinyl (r3: ~30% desaturated, uneven sun fade, rain streaks from the top rail, grimy curling edges)
-tx.rgb = mix(tx.rgb, vec3(lum), 0.32) * 0.86 + 0.02;
-tx.rgb = mix(tx.rgb, vec3(lum * 0.85 + 0.1), smoothstep(0.35, 0.8, nzA.b) * 0.16 + 0.08 * vLoc.y);
+} else if(K == 1) { // printed vinyl: keep the artwork saturated and readable, with only subtle sun fade and weathering
+tx.rgb = mix(tx.rgb, vec3(lum), 0.1) * 0.95 + 0.005;
+tx.rgb = mix(tx.rgb, vec3(lum * 0.9 + 0.06), smoothstep(0.35, 0.8, nzA.b) * 0.06 + 0.02 * vLoc.y);
 float stk = smoothstep(0.55, 0.9, texture(tNoiseS, vec2(vWPs.x + vWPs.z, vWPs.y * 0.08) * 0.35).g) * (0.35 + 0.65 * vLoc.y);
-tx.rgb *= 1.0 - 0.24 * stk;
+tx.rgb *= 1.0 - 0.12 * stk;
 vec2 ed = min(vLoc, 1.0 - vLoc);
 float edg = 1.0 - smoothstep(0.004, 0.035, min(ed.x, ed.y * 0.5) + 0.018 * (nzB.r - 0.5));
 tx.rgb = mix(tx.rgb, tx.rgb * 0.5 + vec3(0.035, 0.032, 0.028), edg * 0.75);

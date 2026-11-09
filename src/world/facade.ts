@@ -20,6 +20,11 @@ import {
 } from "../render/glassmirror.ts"; // (render r-refl) player / web / near peds in the glass
 import * as THREE from "three";
 import { cityLights } from "../render/citylights.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createFacadeNodeMaterial,
+  deriveFacadeNodeMaterial,
+} from "./facadeNodes.ts";
 
 const facadeShader = lazyShaderSections(() => facadeShaderSource);
 // (night) shop fronts light the sidewalk
@@ -961,6 +966,8 @@ function facadeFragmentDeclarations() {
 }
 
 export function createFacadeMaterial(T) {
+  if (usesNodeMaterialBackend()) return createFacadeNodeMaterial(T);
+
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.8,
@@ -1026,6 +1033,10 @@ export function createFacadeMaterial(T) {
 // (night) a variant of the facade material sharing its uniforms / shader but with extra defines, e.g. NO_CITYLIGHT for
 // the far shores (surface.ts: the Manhattan street-light fill lit their facades as a flat tan band at night)
 export function deriveFacadeMaterial(base, defines) {
+  if (base.userData?.nodeFacade) {
+    return deriveFacadeNodeMaterial(base, defines?.FAR_NIGHT !== undefined);
+  }
+
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.8,

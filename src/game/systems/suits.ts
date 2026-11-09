@@ -10,6 +10,14 @@ import * as THREE from "three";
 import { addShaderPatch } from "../../render/materials.ts";
 import { setSuitFabric } from "../../player/suitfabric.ts";
 import { setWebVenom } from "../../player/webRendering.ts";
+import { usesNodeMaterialBackend } from "../../render/backendState.ts";
+import {
+  createSuitNodeMaterial,
+  setSuitNodeMap,
+  setSuitNodeMask,
+  setSuitNodeNormalScale,
+  syncSuitNodeUniforms,
+} from "../../player/suitNodeMaterial.ts";
 
 const suitsShader = lazyShaderSections(() => suitsShaderSource);
 
@@ -95,6 +103,7 @@ export function createSuits(ctx) {
   let placeholderMats = [];
 
   function patch(mat) {
+    if (usesNodeMaterialBackend()) return;
     addShaderPatch(mat, "systemsSuit", (sh) => {
       Object.assign(sh.uniforms, uniforms);
       sh.vertexShader = sh.vertexShader
@@ -119,17 +128,27 @@ export function createSuits(ctx) {
     const all = [];
     obj.traverse((o) => {
       if (!o.isMesh) return;
-      for (const m of [].concat(o.material)) {
+      const materials = Array.isArray(o.material) ? o.material.slice() : [o.material];
+      let changed = false;
+      for (let i = 0; i < materials.length; i++) {
+        let m = materials[i];
         if (!m) continue;
-        if (m.name === "SpiderSuit" || (!s && o.name === "SpiderMan")) s = m;
+        const isSuit = m.name === "SpiderSuit" || (!s && o.name === "SpiderMan");
+        if (isSuit && usesNodeMaterialBackend() && !m.userData?.suitNodeMaterial) {
+          m = createSuitNodeMaterial(m);
+          materials[i] = m;
+          changed = true;
+        }
+        if (isSuit) s ||= m;
         else if (m.name === "Lens") l = m;
         all.push(m);
       }
+      if (changed) o.material = Array.isArray(o.material) ? materials : materials[0];
     });
     if (s && s !== suitMat) {
       suitMat = s;
       nrmOrig = s.normalScale?.clone() || null;
-      if (!s.userData.__patches?.has("systemsSuit")) patch(s);
+      if (!usesNodeMaterialBackend() && !s.userData.__patches?.has("systemsSuit")) patch(s);
     }
     if (l && l !== lensMat) {
       lensMat = l;
@@ -507,6 +526,7 @@ export function createSuits(ctx) {
       want = cleanMap || origMap;
     }
     if (suitMat.map !== want) suitMat.map = want;
+    setSuitNodeMap(suitMat, want);
   }
 
   function apply(id) {
@@ -532,6 +552,7 @@ export function createSuits(ctx) {
     setWebVenom(!!S.symbiote); // user r-venomweb: Symbiote suit shoots thick black lumpy webs (player/webRendering.ts)
     if (S.symbiote && !symMask)
       uniforms.uSymMask.value = symMask = buildSymMask();
+    setSuitNodeMask(uniforms.uSymMask.value);
     if (suitMat) {
       if (suitMat.userData.__envOrig == null)
         suitMat.userData.__envOrig = suitMat.envMapIntensity;
@@ -542,7 +563,9 @@ export function createSuits(ctx) {
         suitMat.normalScale.copy(nrmOrig).multiplyScalar(S.normalScale);
       else suitMat.normalScale.copy(nrmOrig);
     }
+    setSuitNodeNormalScale(suitMat?.normalScale);
     suitMap(S);
+    syncSuitNodeUniforms(uniforms);
     if (lensMat && lensOrig) {
       if (S.lens) {
         lensMat.color.set(S.lens.color);

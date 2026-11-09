@@ -4,9 +4,12 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import poolShaderSource from "./shaders/glsl/pool.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
+import * as TSL from "three/tsl";
 import * as THREE from "three";
 import { cascadedShadowState } from "../render/cascadedShadows.ts";
 import { getQuality } from "../render/quality.ts";
+import { interleaveVertexAttributes } from "../render/vertexPacking.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { isPerformanceFeatureDisabled } from "./performanceFlags.ts";
 
 const poolShader = lazyShaderSections(() => poolShaderSource);
@@ -22,9 +25,48 @@ const LOD_VERT_PARS = poolShader.lodVertexDeclarations;
 const LOD_VERT = poolShader.lodVertexFade;
 const LOD_FRAG_PARS = poolShader.lodFragmentDeclarations;
 const LOD_FRAG = poolShader.lodFragmentFade;
+// Keep module evaluation independent of the shadow module's initialization order.
+// Pools are imported throughout world construction, so the shared shadow state
+// may not be ready when this node graph is first created.
+const lodFrameNode = TSL.uniform(new THREE.Vector4(0, 0.1, 1, 0)).onRenderUpdate((_, self) => {
+  const params = cascadedShadowState?.params;
+  if (params) self.value.copy(params);
+});
+const lodNoise = () => {
+  const pixel = TSL.screenCoordinate.xy;
+  return TSL.fract(
+    TSL.fract(TSL.dot(pixel, TSL.vec2(0.06711056, 0.00583715))).mul(52.9829189)
+      .add(lodFrameNode.x.mul(1.618034)),
+  );
+};
+const combineMask = (material, keep) => {
+  material.maskNode = material.maskNode
+    ? TSL.bool(material.maskNode).and(keep)
+    : keep;
+};
 export function applyLodFade(mat) {
   if (!mat || mat.userData.lodFade) return mat;
   mat.userData.lodFade = true;
+  if (mat.isNodeMaterial) {
+    // Pool instances carry [fade-in start/end, fade-out start/end] in aLod.
+    // Screen-space dither keeps complementary LODs from opening a visible gap.
+    const lod = TSL.varying(TSL.attribute("aLod", "vec4"), "vPoolLod");
+    const distance = TSL.positionWorld.xz.sub(TSL.cameraPosition.xz).length();
+    const fadeIn = TSL.select(
+      lod.y.greaterThan(lod.x),
+      TSL.smoothstep(lod.x, lod.y, distance),
+      TSL.float(1),
+    );
+    const fadeOut = TSL.select(
+      lod.w.greaterThan(lod.z),
+      TSL.float(1).sub(TSL.smoothstep(lod.z, lod.w, distance)),
+      TSL.float(1),
+    );
+    const noise = lodNoise();
+    combineMask(mat, noise.lessThan(fadeOut).and(noise.greaterThanEqual(TSL.float(1).sub(fadeIn))));
+    return mat;
+  }
+  if (usesNodeMaterialBackend()) return mat;
   const prev = mat.onBeforeCompile,
     prevKey = mat.customProgramCacheKey;
   mat.onBeforeCompile = (sh, r) => {
@@ -93,6 +135,9 @@ export class Pool {
     this.resolutionLodWeight = resolutionLodWeight;
     this.minFadeWidth = minFadeWidth;
     this._lodScale = lodScale;
+    // Keep pooled meshes under WebGPU's minimum vertex-buffer limit. The pool
+    // adds per-instance attributes below, so pack static geometry first.
+    geo = interleaveVertexAttributes(geo);
     this.geo = geo;
     this.mat = mat;
     this.max = max;
@@ -418,6 +463,14 @@ export class Pool {
 export function applyDistanceFade(mat, d0, d1) {
   if (!mat || mat.userData.distFade) return mat;
   mat.userData.distFade = true;
+  if (mat.isNodeMaterial) {
+    const distance = TSL.positionWorld.xz.sub(TSL.cameraPosition.xz).length();
+    const fade = TSL.float(d1).sub(distance).div(Math.max(1e-3, d1 - d0)).clamp(0, 1);
+    const noise = lodNoise();
+    combineMask(mat, noise.lessThan(fade));
+    return mat;
+  }
+  if (usesNodeMaterialBackend()) return mat;
   const prev = mat.onBeforeCompile,
     prevKey = mat.customProgramCacheKey;
   mat.onBeforeCompile = (sh, r) => {

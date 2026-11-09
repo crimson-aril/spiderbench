@@ -60,7 +60,7 @@ function textureDimensions(texture: any) {
   return { width, height };
 }
 
-/** Reports source validity and the WebGL upload state of scene material textures. */
+/** Reports source validity and upload state for the renderer's active backend. */
 export function auditSceneTextures(renderer: any, scene: any) {
   const uses = new Map<any, TextureUse>();
   const add = (texture: any, reference: string) => {
@@ -103,16 +103,30 @@ export function auditSceneTextures(renderer: any, scene: any) {
   let uploaded = 0;
   let renderTargets = 0;
   let readyRenderTargets = 0;
+  const backend = renderer.backend;
+  const usesBackendTextureData = typeof backend?.get === "function";
 
   for (const { texture, references } of uses.values()) {
     const { width, height } = textureDimensions(texture);
     const isRenderTarget = Boolean(texture.isRenderTargetTexture);
     const validSource = isRenderTarget || (width > 0 && height > 0);
+    const backendTextureData = usesBackendTextureData ? backend.get(texture) : null;
+    const backendHandle = backend?.isWebGLBackend
+      ? backendTextureData?.textureGPU
+      : backendTextureData?.texture;
+    const backendReady = Boolean(
+      backendHandle &&
+        backendTextureData?.version === texture.version &&
+        backendTextureData?.isDefaultTexture !== true,
+    );
     const props = renderer.properties?.get?.(texture);
-    const hasGpuHandle = Boolean(props?.__webglTexture);
-    const gpuUploaded =
-      !isRenderTarget && hasGpuHandle && props.__version === texture.version;
-    const renderTargetReady = isRenderTarget && hasGpuHandle;
+    const webglHandle = props?.__webglTexture;
+    const webglReady = Boolean(webglHandle && props.__version === texture.version);
+    const textureReady = usesBackendTextureData ? backendReady : webglReady;
+    const renderTargetReady = isRenderTarget && Boolean(
+      usesBackendTextureData ? backendHandle : webglHandle,
+    );
+    const gpuUploaded = !isRenderTarget && textureReady;
     const name =
       texture.name ||
       `${texture.constructor?.name || "Texture"} ${texture.uuid?.slice(0, 8) || ""}`;

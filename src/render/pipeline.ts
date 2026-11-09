@@ -46,11 +46,24 @@ import {
   CL_SLOTS,
 } from "./citylights.ts"; // (night) local city lights: lit haze
 import { createGlassMirror } from "./glassmirror.ts"; // (render r-refl) player / cars / peds mirrored in facade glass
+import { isRenderDebugEnabled, logRenderDebugSetup, readRenderDebugBands } from "./renderDiagnostics.ts";
 
-export function createPipeline({ renderer, scene, camera, lighting }) {
+export async function createPipeline({ renderer, scene, camera, lighting }) {
+  // The node-based path is intentionally isolated from the legacy GLSL
+  // pipeline. Effects are added here as their GLSL implementations are
+  // migrated to TSL; WebGLRenderer continues to use the established path.
+  if (renderer.isWebGPURenderer === true) {
+    const { createTslPipeline } = await import("./tslPipeline.ts");
+    return createTslPipeline({ renderer, scene, camera, lighting, quality: lighting.quality });
+  }
+
   const Q = lighting.quality;
   const reversed = !!renderer.capabilities.reversedDepthBuffer;
   const params = new URLSearchParams(location.search);
+  const renderDebug = isRenderDebugEnabled(params);
+  let renderDebugSetupLogged = false;
+  let renderDebugSampleLogged = false;
+  let renderDebugPostLogged = false;
   const prof = new GpuProfiler(renderer, params.has("prof"));
   // (perf) with ?prof=1, split 'scene+shadows' into 'shadows' (all CSM cascades) and 'scene' (main colour pass),
   // and count draw calls / triangles of the shadow passes separately (pipeline.stats.shadowCalls / shadowTris)
@@ -790,6 +803,18 @@ export function createPipeline({ renderer, scene, camera, lighting }) {
     prof.poll();
     const cam = camera;
     cam.updateMatrixWorld();
+    if (renderDebug && !renderDebugSetupLogged) {
+      renderDebugSetupLogged = true;
+      logRenderDebugSetup({
+        renderer,
+        scene,
+        camera: cam,
+        lighting,
+        quality: Q,
+        grade,
+        backend: "WebGL2 legacy pipeline",
+      });
+    }
     if (dofState.auto) {
       dofState.auto.getWorldPosition(tmpV);
       dofState.focus = tmpV.distanceTo(
@@ -841,6 +866,26 @@ export function createPipeline({ renderer, scene, camera, lighting }) {
     renderer.setClearColor(0x000000, 1);
     renderer.clear(true, true, false);
     renderer.render(scene, cam);
+    if (renderDebug && !renderDebugSampleLogged) {
+      renderDebugSampleLogged = true;
+      const sampleContext = {
+        frame,
+        cameraPosition: cam.getWorldPosition(new THREE.Vector3()).toArray(),
+        renderCalls: renderer.info?.render?.calls ?? null,
+        renderedTriangles: renderer.info?.render?.triangles ?? null,
+      };
+      // WebGLRenderer's async path uses a PIXEL_PACK_BUFFER. On this scene's
+      // half-float target it can leave the pack buffer bound and poison the
+      // later auto-exposure readback, so use the synchronous WebGL read here.
+      void readRenderDebugBands(renderer, sceneRT, { forceSync: true })
+        .then(({ summary }) => {
+          console.info(`[render-debug] WebGL2 scene-pass sample\n${JSON.stringify({
+            ...summary,
+            ...sampleContext,
+          }, null, 2)}`);
+        })
+        .catch((error) => console.warn("[render-debug] WebGL2 scene-pass readback failed", error));
+    }
 
     // --- character mask (depth only, same jittered camera)
     const po = window.__ctx?.player?.object;
@@ -1293,6 +1338,45 @@ export function createPipeline({ renderer, scene, camera, lighting }) {
         0.14,
         lighting.nightHaze?.k ?? 0,
       ); /* (night r8) lamp pools / warm lit surfaces fall on the (warm) highlight side of the split */
+      if (renderDebug && !renderDebugPostLogged) {
+        renderDebugPostLogged = true;
+        let autoExposure: any = null;
+        if (grade.autoExposure) {
+          try {
+            const values = new Float32Array(4);
+            renderer.readRenderTargetPixels(aeRT[aeIdx], 0, 0, 1, 1, values);
+            const appliedEv = Math.max(
+              -grade.aeRange,
+              Math.min(grade.aeRange, -(values[0] - grade.aeKey) * grade.aeStrength),
+            );
+            autoExposure = {
+              adaptedLog2Luminance: Number(values[0].toFixed(4)),
+              currentLog2Luminance: Number(values[1].toFixed(4)),
+              appliedEv: Number(appliedEv.toFixed(4)),
+            };
+          } catch (error) {
+            autoExposure = { readbackFailed: String(error) };
+          }
+        }
+        console.info(`[render-debug] WebGL2 effective final-pass inputs\n${JSON.stringify({
+          baseExposure: u.uExposure.value,
+          autoExposureEnabled: grade.autoExposure,
+          autoExposure,
+          effectiveExposure: u.uExposure.value * (autoExposure?.appliedEv != null ? 2 ** autoExposure.appliedEv : 1),
+          bloom: u.uBloomStr.value,
+          saturation: u.uSat.value,
+          contrast: u.uContrast.value,
+          pivot: u.uPivot.value,
+          lift: u.uLift.value?.toArray?.() ?? u.uLift.value,
+          gamma: u.uGamma.value?.toArray?.() ?? u.uGamma.value,
+          gain: u.uGain.value?.toArray?.() ?? u.uGain.value,
+          vignette: u.uVignette.value,
+          grain: u.uGrain.value,
+          toneMapping: renderer.toneMapping,
+          outputColorSpace: renderer.outputColorSpace,
+          stage: "values bound immediately before the final post pass",
+        }, null, 2)}`);
+      }
       final.render(renderer, null);
     }
     if (pipeline.debug) {

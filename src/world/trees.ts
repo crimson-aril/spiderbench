@@ -7,8 +7,13 @@ import treesFragmentShader from "./shaders/fragment/tree-shadow.frag?raw";
 // Autumn trees: branching trunks + dense alpha-tested leaf-cluster cards with spherical normals,
 // per-instance two-tone autumn tint, canopy self-occlusion. Two LODs per kind, instanced through distance pools.
 import * as THREE from "three";
+import * as WEBGPU from "three/webgpu";
+import * as TSL from "three/tsl";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import { assetUrl } from "../assets.ts";
+import { interleaveVertexAttributes } from "../render/vertexPacking.ts";
+import { createPlaceholderTexture } from "../render/placeholderTexture.ts";
 import { G, mulberry32, PARK_WATER, parkWaterAt } from "./layout.ts";
 import { PARK_MEADOWS, PARK_ROCKS, PARK_SITES, meadowDist } from "./parkData.ts";
 import { Pool } from "./pool.ts";
@@ -170,7 +175,7 @@ function canopyGeometry({
   g.setAttribute("aLeaf", new THREE.Float32BufferAttribute(R, 2));
   g.setIndex(new THREE.Uint32BufferAttribute(I, 1));
   g.computeBoundingSphere();
-  return g;
+  return interleaveVertexAttributes(g);
 }
 
 // Lumpy solid canopy core (displaced icospheres) so canopies read dense from above; flagged with aLeaf.x >= 2
@@ -225,8 +230,8 @@ function addCore(P, N, UV, R, I, lobes, scale, seed, maxLobes = 9, detail = 1) {
 let LEAF_TEX = null;
 function leafTextures() {
   if (LEAF_TEX) return LEAF_TEX;
-  const col = new THREE.Texture();
-  const nrm = new THREE.Texture();
+  const col = createPlaceholderTexture([0, 0, 0, 0], "tree-leaves-loading");
+  const nrm = createPlaceholderTexture([128, 128, 255, 255], "tree-leaf-normal-loading");
   LEAF_TEX = { col, nrm, nrmUniform: { value: nrm }, materials: new Set() };
   const load = (file, key) => {
     loadKTX2TextureAsync(assetUrl("city/environmentTextures/" + file))
@@ -258,6 +263,70 @@ function registerLeafMaterial(mat, LT) {
 
 function leafMaterial(T) {
   const LT = leafTextures();
+  if (usesNodeMaterialBackend()) {
+    const mat = registerLeafMaterial(
+      new WEBGPU.MeshStandardNodeMaterial({
+        color: 0xffffff,
+        alphaTest: 0.42,
+        side: THREE.DoubleSide,
+        roughness: 0.78,
+      }),
+      LT,
+    );
+    const atlas = TSL.texture(LT.col, TSL.uv());
+    atlas.onRenderUpdate(() => {
+      atlas.value = LT.col;
+    });
+    const leaf = TSL.attribute("aLeaf", "vec2");
+    const tintA = TSL.attribute("aTintA", "vec3");
+    const tintB = TSL.attribute("aTintB", "vec3");
+    const core = leaf.x.greaterThanEqual(1.5);
+    const tone = leaf.x.clamp(0, 1);
+    const leafHue = atlas.g.mul(0.8).add(leaf.y.mul(0.55)).sub(0.18);
+    const tint = TSL.mix(tintA, tintB, TSL.smoothstep(0.15, 0.85, leafHue));
+    const odd = TSL.fract(atlas.g.mul(13.7).add(leaf.y.mul(5.3)));
+    const speckledTint = TSL.select(
+      odd.greaterThan(0.93),
+      TSL.vec3(0.13, 0.06, 0.025),
+      TSL.select(
+        odd.lessThan(0.035),
+        TSL.vec3(0.16, 0.14, 0.035),
+        tint,
+      ),
+    );
+    const outerColor = speckledTint.mul(
+      TSL.float(0.42).add(atlas.r.mul(0.72)),
+    );
+    const coreTint = TSL.mix(
+      tintA,
+      tintB,
+      TSL.smoothstep(0.15, 0.85, atlas.g.mul(0.8).add(leaf.y.mul(0.55)).sub(0.18)),
+    );
+    const coreColor = coreTint
+      .mul(TSL.float(0.42).add(TSL.mix(0.66, 0.92, leaf.y.clamp(0, 1)).mul(0.72)))
+      .mul(TSL.mix(0.24, 0.42, tone));
+    mat.colorNode = TSL.select(core, coreColor, outerColor);
+    mat.opacityNode = TSL.select(core, TSL.float(1), atlas.a);
+
+    const time = TSL.uniform(0);
+    const position = TSL.positionLocal;
+    const phase = position.x.mul(0.13).add(position.z.mul(0.17));
+    const crownWind = TSL.vec3(
+      TSL.sin(time.mul(1.3).add(phase).add(position.y.mul(0.4))).mul(0.006),
+      0,
+      TSL.cos(time.mul(1.1).add(phase)).mul(0.006),
+    ).mul(position.y);
+    const flutter = TSL.vec3(
+      TSL.sin(time.mul(4.1).add(TSL.dot(position, TSL.vec3(3.1, 1.7, 2.3)))).mul(0.035),
+      0,
+      TSL.sin(time.mul(3.3).add(TSL.dot(position, TSL.vec3(1.9, 2.9, 1.3)))).mul(0.035),
+    ).mul(leaf.x.lessThan(1.5));
+    mat.positionNode = position.add(crownWind).add(flutter);
+    mat.userData.nodeTime = time;
+    mat.userData.uTime = { value: 0 };
+    mat.name = "TreeLeaves.TSL";
+    return mat;
+  }
   const mat = registerLeafMaterial(
     new THREE.MeshStandardMaterial({
       map: LT.col,
@@ -660,11 +729,83 @@ function crownGeometry(
   g.setAttribute("aLeaf", new THREE.Float32BufferAttribute(A, 2));
   g.setIndex(new THREE.Uint32BufferAttribute(I, 1));
   g.computeBoundingSphere();
-  return g;
+  return interleaveVertexAttributes(g);
 }
 
 function crownMaterial() {
   const LT = leafTextures();
+  if (usesNodeMaterialBackend()) {
+    const mat = new WEBGPU.MeshStandardNodeMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      alphaTest: 0.32,
+    });
+    const leaf = TSL.attribute("aLeaf", "vec2");
+    const tintA = TSL.attribute("aTintA", "vec3");
+    const tintB = TSL.attribute("aTintB", "vec3");
+    const p = TSL.positionWorld;
+      // Value noise in world space keeps the three crown LODs visually related.
+    const hash = (q) => TSL.fract(TSL.sin(TSL.dot(q, TSL.vec3(127.1, 311.7, 74.7))).mul(43758.5453));
+    const valueNoise = (q) => {
+      const cell = TSL.floor(q);
+      const f = TSL.fract(q);
+      const blend = f.mul(f).mul(TSL.float(3).sub(f.mul(2)));
+      const c000 = hash(cell);
+      const c100 = hash(cell.add(TSL.vec3(1, 0, 0)));
+      const c010 = hash(cell.add(TSL.vec3(0, 1, 0)));
+      const c110 = hash(cell.add(TSL.vec3(1, 1, 0)));
+      const c001 = hash(cell.add(TSL.vec3(0, 0, 1)));
+      const c101 = hash(cell.add(TSL.vec3(1, 0, 1)));
+      const c011 = hash(cell.add(TSL.vec3(0, 1, 1)));
+      const c111 = hash(cell.add(TSL.vec3(1, 1, 1)));
+      const z0 = TSL.mix(
+        TSL.mix(TSL.mix(c000, c100, blend.x), TSL.mix(c010, c110, blend.x), blend.y),
+        TSL.mix(TSL.mix(c001, c101, blend.x), TSL.mix(c011, c111, blend.x), blend.y),
+        blend.z,
+      );
+      return z0;
+    };
+    const n1 = valueNoise(p.mul(0.62));
+    const n2 = valueNoise(p.mul(2.1).add(3.1));
+    const n3 = valueNoise(p.mul(5.3).add(7.7));
+    const clump = n1.mul(0.65).add(n2.mul(0.35));
+    const variation = TSL.smoothstep(
+      0.1,
+      0.9,
+      TSL.float(0.5)
+        .add(n2.sub(0.5).mul(0.7))
+        .add(leaf.y.sub(0.5).mul(0.35))
+        .add(n1.sub(0.5).mul(0.4)),
+    );
+    let foliage = TSL.mix(tintA, tintB, variation).mul(
+      TSL.float(0.74).add(n3.mul(0.34)),
+    );
+    foliage = TSL.select(
+      TSL.fract(n3.mul(17.3).add(leaf.y.mul(3.1))).greaterThan(0.97),
+      foliage.mul(TSL.vec3(0.55, 0.4, 0.3)),
+      foliage,
+    );
+    const dense = TSL.smoothstep(0.3, 0.62, clump.add(n3.mul(0.22)));
+    const body = TSL.mix(tintB.mul(0.42), foliage, dense).mul(
+      TSL.mix(
+        TSL.vec3(1),
+        TSL.vec3(1.12, 1.1, 0.8),
+        TSL.smoothstep(0.62, 0.9, n2).mul(0.6),
+      ),
+    );
+    const exposure = leaf.x.clamp(0, 1);
+    const occlusion = TSL.mix(0.3, 1.14, TSL.pow(exposure, 1.25)).mul(
+      TSL.mix(0.66, 1.1, TSL.smoothstep(0.3, 0.75, clump)),
+    );
+    const coverage = TSL.smoothstep(0.18, 0.55, clump.mul(0.8).add(n3.mul(0.35)));
+    const facing = TSL.abs(TSL.dot(TSL.normalWorld, TSL.normalize(TSL.cameraPosition.sub(p))));
+    const alpha = TSL.mix(coverage.mul(1.25), TSL.float(1), TSL.smoothstep(0.3, 0.72, facing));
+    mat.colorNode = body.mul(occlusion);
+    mat.opacityNode = alpha;
+    mat.name = "TreeCanopy.TSL";
+    void LT;
+    return mat;
+  }
   const mat = registerLeafMaterial(
     new THREE.MeshStandardMaterial({ map: LT.col, roughness: 0.85 }),
     LT,
@@ -741,22 +882,37 @@ function canopyShade(pts) {
   g.setAttribute("aTree", new THREE.InstancedBufferAttribute(D, 4));
   g.instanceCount = n;
   const sun = new THREE.Vector3(0.5, 0.5, 0.5);
-  const mat = new THREE.ShaderMaterial({
-    glslVersion: THREE.GLSL3,
-    uniforms: { uSun: { value: sun }, uY: { value: G.CURB_H + 0.03 } },
-    vertexShader: treesVertexShader,
-    fragmentShader: treesFragmentShader,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.MultiplyBlending,
-    premultipliedAlpha: true,
-    toneMapped: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -4,
-  });
+  const nodeBackend = usesNodeMaterialBackend();
+  const mat = nodeBackend
+    ? new WEBGPU.MeshBasicNodeMaterial({
+        color: 0x343b30,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        blending: THREE.MultiplyBlending,
+        side: WEBGPU.DoubleSide,
+        toneMapped: false,
+      })
+    : new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        uniforms: { uSun: { value: sun }, uY: { value: G.CURB_H + 0.03 } },
+        vertexShader: treesVertexShader,
+        fragmentShader: treesFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.MultiplyBlending,
+        premultipliedAlpha: true,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -4,
+      });
+  if (nodeBackend) mat.colorNode = TSL.vec3(0.34, 0.38, 0.3);
   const mesh = new THREE.Mesh(g, mat);
   mesh.frustumCulled = false;
+  // This overlay needs per-instance world-position projection. The city surfaces
+  // still receive the real directional shadow in the TSL path.
+  mesh.visible = !nodeBackend;
   mesh.renderOrder = 2;
   mesh.name = "park-canopy-shade";
   const tmp = new THREE.Vector3(),
@@ -1520,6 +1676,7 @@ export function buildTrees({ scene, T, spots, parkPaths }) {
   out.update = (dt, cam) => {
     t += dt * windScale;
     leafMat.userData.uTime.value = t;
+    if (leafMat.userData.nodeTime) leafMat.userData.nodeTime.value = t;
     // sun direction for the canopy shadow decals (the CSM's light 0; found once in the top-level scene)
     if (!sunL) {
       let top = scene;

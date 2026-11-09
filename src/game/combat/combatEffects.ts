@@ -7,6 +7,9 @@ import fxAlphaParticleFragmentShader from "./shaders/fragment/particle-alpha.fra
 // wrapped around enemy bones, bullet tracers / muzzle flashes, and the gunmen's pistol mesh.
 // All textures are generated on canvases at start-up (no external files). Colours are linear HDR (pipeline blooms > 1).
 import * as THREE from "three";
+import * as WEBGPU from "three/webgpu";
+import * as TSL from "three/tsl";
+import { usesNodeMaterialBackend } from "../../render/backendState.ts";
 import { clamp, randomBetween, WORLD_UP } from "./combatMath.ts";
 
 const _v = new THREE.Vector3(),
@@ -112,6 +115,55 @@ const PVERT = fxParticleVertexShader;
 const PFRAG_ADD = fxAdditiveParticleFragmentShader;
 const PFRAG_ALPHA = fxAlphaParticleFragmentShader;
 
+function createParticleNodeMaterial(texture, additive) {
+  const iPos = TSL.attribute("iPos", "vec3");
+  const iDir = TSL.attribute("iDir", "vec3");
+  const iSize = TSL.attribute("iSize", "vec2");
+  const iCol = TSL.varying(TSL.attribute("iCol", "vec4"), "vParticleColor");
+  const iTile = TSL.attribute("iTile", "float");
+  const mv = TSL.modelViewMatrix.mul(TSL.vec4(iPos, 1));
+  const viewDirection = TSL.modelViewMatrix.mul(TSL.vec4(iDir, 0)).xyz;
+  const viewLength = viewDirection.xy.length();
+  const axisX = TSL.select(
+    viewLength.greaterThan(1e-5),
+    viewDirection.xy.div(viewLength.max(1e-5)),
+    TSL.vec2(1, 0),
+  );
+  const axisY = TSL.vec2(axisX.y.negate(), axisX.x);
+  const baseSize = iSize.x.mul(TSL.float(1).add(iSize.y));
+  const offset = axisX
+    .mul(TSL.positionLocal.x.mul(baseSize))
+    .add(axisY.mul(TSL.positionLocal.y.mul(iSize.x)));
+  const clipPosition = TSL.cameraProjectionMatrix.mul(
+    TSL.vec4(mv.xy.add(offset), mv.z, mv.w),
+  );
+  const tileX = TSL.mod(iTile, 2);
+  const tileY = TSL.floor(iTile.div(2));
+  const atlasUv = TSL.varying(
+    TSL.uv().add(TSL.vec2(tileX, TSL.float(1).sub(tileY))).mul(0.5),
+    "vParticleUv",
+  );
+  const mask = TSL.texture(texture, atlasUv).a;
+  const alpha = mask.mul(iCol.a);
+  const material = new WEBGPU.MeshBasicNodeMaterial();
+  material.name = additive ? "CombatParticlesAdd.TSL" : "CombatParticlesAlpha.TSL";
+  material.vertexNode = clipPosition;
+  material.colorNode = additive ? iCol.rgb.mul(alpha) : iCol.rgb;
+  material.opacityNode = additive ? TSL.float(1) : alpha;
+  material.maskNode = alpha.greaterThan(0.002);
+  material.transparent = true;
+  material.depthWrite = false;
+  material.depthTest = true;
+  material.side = WEBGPU.DoubleSide;
+  material.blending = additive ? THREE.CustomBlending : THREE.NormalBlending;
+  if (additive) {
+    material.blendSrc = THREE.OneFactor;
+    material.blendDst = THREE.OneFactor;
+    material.blendEquation = THREE.AddEquation;
+  }
+  return material;
+}
+
 class Particles {
   constructor(scene, tex, additive, max = 700) {
     this.max = max;
@@ -136,17 +188,19 @@ class Particles {
     this.aCol = A("iCol", 4);
     this.aTile = A("iTile", 1);
     g.instanceCount = 0;
-    const m = new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      uniforms: { uTex: { value: tex } },
-      vertexShader: PVERT,
-      fragmentShader: additive ? PFRAG_ADD : PFRAG_ALPHA,
-      transparent: true,
-      depthWrite: false,
-      depthTest: true,
-      blending: additive ? THREE.CustomBlending : THREE.NormalBlending,
-    });
-    if (additive) {
+    const m = usesNodeMaterialBackend()
+      ? createParticleNodeMaterial(tex, additive)
+      : new THREE.ShaderMaterial({
+          glslVersion: THREE.GLSL3,
+          uniforms: { uTex: { value: tex } },
+          vertexShader: PVERT,
+          fragmentShader: additive ? PFRAG_ADD : PFRAG_ALPHA,
+          transparent: true,
+          depthWrite: false,
+          depthTest: true,
+          blending: additive ? THREE.CustomBlending : THREE.NormalBlending,
+        });
+    if (additive && !usesNodeMaterialBackend()) {
       m.blendSrc = THREE.OneFactor;
       m.blendDst = THREE.OneFactor;
       m.blendEquation = THREE.AddEquation;

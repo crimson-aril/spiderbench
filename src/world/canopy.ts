@@ -6,6 +6,9 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import canopyShaderSource from "./shaders/glsl/canopy.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { getQuality } from "../render/quality.ts";
+import { createCanopyNodeMaterial } from "./canopyNodes.ts";
 import * as THREE from "three";
 import { mulberry32 } from "./layout.ts";
 
@@ -146,15 +149,18 @@ export class CanopyBatch {
     }
     if (this._mat)
       return this._inst(scene, name, castShadow, geo, this._mat, opts);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 0.95,
-      metalness: 0,
-      flatShading: false,
-    });
+    const nodeBackend = usesNodeMaterialBackend();
+    const mat = nodeBackend
+      ? createCanopyNodeMaterial(this.fade, getQuality().name)
+      : new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.95,
+          metalness: 0,
+          flatShading: false,
+        });
     this._mat = mat;
     const fade = this.fade;
-    mat.onBeforeCompile = (sh) => {
+    if (!nodeBackend) mat.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader
         .replace(
           "#include <common>",canopyShader.vertexCommon,
@@ -175,12 +181,26 @@ export class CanopyBatch {
           "#include <normal_fragment_maps>",canopyShader.fragmentNormalMaps,
         );
     };
-    mat.customProgramCacheKey = () =>
-      "far-canopy-v2" + (fade ? fade.join(",") : "") + this.shape;
+    if (!nodeBackend)
+      mat.customProgramCacheKey = () =>
+        "far-canopy-v2" + (fade ? fade.join(",") : "") + this.shape;
     return this._inst(scene, name, castShadow, geo, mat, opts);
   }
   _inst(scene, name, castShadow, geo, mat, opts) {
-    const mesh = new THREE.InstancedMesh(geo, mat, this.M.length);
+    let meshGeo = geo;
+    if (usesNodeMaterialBackend()) {
+      meshGeo = geo.clone();
+      const centers = new Float32Array(this.M.length * 3);
+      const center = new THREE.Vector3();
+      this.M.forEach((matrix, index) => {
+        center.setFromMatrixPosition(matrix).toArray(centers, index * 3);
+      });
+      meshGeo.setAttribute(
+        "aCanopyCenter",
+        new THREE.InstancedBufferAttribute(centers, 3),
+      );
+    }
+    const mesh = new THREE.InstancedMesh(meshGeo, mat, this.M.length);
     const col = new THREE.Color();
     for (let i = 0; i < this.M.length; i++) {
       mesh.setMatrixAt(i, this.M[i]);

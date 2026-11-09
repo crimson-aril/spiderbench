@@ -14,6 +14,8 @@ import { farShoreHeight } from "./farshore.ts";
 
 import { REFL_LAYER } from "./waterLayers.ts";
 import { nightK } from "../render/daynight.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createHinterlandNodeMaterial } from "./horizonNodes.ts";
 
 const horizonShader = lazyShaderSections(() => horizonShaderSource);
 // (night)
@@ -152,7 +154,9 @@ export function buildHinterland({ scene, R0 = 4300, R1 = 17000 }) {
   }
   geo.setIndex(keep);
   geo.clearGroups();
-  const mat = createHinterlandMaterial();
+  const mat = usesNodeMaterialBackend()
+    ? createHinterlandNodeMaterial()
+    : createHinterlandMaterial();
   const mesh = new THREE.InstancedMesh(geo, mat, M.length);
   const wallA = new Float32Array(M.length * 3),
     roofA = new Float32Array(M.length * 3);
@@ -163,6 +167,14 @@ export function buildHinterland({ scene, R0 = 4300, R1 = 17000 }) {
   }
   geo.setAttribute("aWall", new THREE.InstancedBufferAttribute(wallA, 3));
   geo.setAttribute("aRoof", new THREE.InstancedBufferAttribute(roofA, 3));
+  const lit = new Float32Array(M.length);
+  for (let i = 0; i < M.length; i++) {
+    const elements = M[i].elements;
+    const noise = Math.sin(elements[12] * 12.9898 + elements[14] * 78.233) * 43758.5453;
+    const share = noise - Math.floor(noise);
+    lit[i] = share < 0.35 ? 0 : share < 0.93 ? (share - 0.35) * 0.35 : 0.6 + (share - 0.93) * 4;
+  }
+  geo.setAttribute("aLit", new THREE.InstancedBufferAttribute(lit, 1));
   mesh.instanceMatrix.needsUpdate = true;
   mesh.computeBoundingSphere();
   mesh.name = "hinterland";

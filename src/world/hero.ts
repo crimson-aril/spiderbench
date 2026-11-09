@@ -6,7 +6,10 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import heroShaderSource from "./shaders/glsl/hero.glsl?raw";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
 import { FacadeBuilder, STYLE, LAYER } from "./facade.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 
 const heroShader = lazyShaderSections(() => heroShaderSource);
 
@@ -140,6 +143,52 @@ export function buildHero({
   const finMesh = new THREE.Mesh(F.build(), facadeMat);
   finMesh.castShadow = finMesh.receiveShadow = true;
   group.add(finMesh);
+
+  if (usesNodeMaterialBackend()) {
+    const glassMat = new WEBGPU.MeshPhysicalNodeMaterial({
+      color: 0x2a3540,
+      roughness: 0.06,
+      metalness: 0.2,
+      clearcoat: 0.8,
+      clearcoatRoughness: 0.06,
+    });
+    const viewDirection = TSL.normalize(
+      TSL.cameraPosition.sub(TSL.positionWorld),
+    );
+    const facing = TSL.float(1).sub(
+      TSL.dot(viewDirection, TSL.normalize(TSL.normalWorld)).abs().clamp(0, 1),
+    );
+    const fresnel = TSL.pow(facing, 5);
+    glassMat.colorNode = TSL.mix(
+      TSL.vec3(0.025, 0.035, 0.045),
+      TSL.vec3(0.22, 0.29, 0.36),
+      TSL.float(0.24).add(fresnel.mul(0.62)),
+    );
+    glassMat.roughnessNode = TSL.float(0.055).add(fresnel.mul(0.055));
+    const glass = new THREE.Mesh(
+      new THREE.PlaneGeometry(z1 - z0, H - 6.0),
+      glassMat,
+    );
+    glass.position.set(X - 0.02, 6.0 + (H - 6.0) / 2, (z0 + z1) / 2);
+    glass.rotation.y = -Math.PI / 2;
+    glass.receiveShadow = true;
+    group.add(glass);
+
+    const anchors = fins.map((z) => ({
+      point: new THREE.Vector3(X - 0.45, 40, z),
+      normal: new THREE.Vector3(-1, 0, 0),
+    }));
+    return {
+      group,
+      box: { min: [X - 0.45, 0, rect.z0], max: [rect.x1, H + 1.6, rect.z1] },
+      footprint: { x0: X, z0: rect.z0, x1: rect.x1, z1: rect.z1, h: H, kind: "hero" },
+      fins,
+      anchors,
+      X,
+      H,
+      renderReflection() {},
+    };
+  }
 
   // ---- planar reflection
   const size = new THREE.Vector2();

@@ -4,6 +4,7 @@ import { lazyShaderSections } from "../shaderSections.ts";
 import groundShaderSource from "./shaders/glsl/ground.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
+import { CURB_HEIGHT, WATER_Y } from "./layoutConstants.ts";
 import {
   G,
   avenues,
@@ -61,6 +62,12 @@ import { PARK_MEADOWS, meadowDist } from "./parkData.ts";
 import { adjustParkPaths } from "./park.ts"; // park agent: East Drive / paths clear the museum lot
 import { CanopyBatch } from "./canopy.ts";
 import { getQuality } from "../render/quality.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createAsphaltNodeMaterial,
+  createGrassNodeMaterial,
+  createSidewalkNodeMaterial,
+} from "./groundNodes.ts";
 
 const groundShader = lazyShaderSections(() => groundShaderSource);
 
@@ -68,12 +75,12 @@ const groundShader = lazyShaderSections(() => groundShaderSource);
 // Heights of the rendered ground surfaces (single source of truth for geometry AND terrainHeight())
 export const GY = {
   ROAD: 0,
-  WALK: G.CURB_H,
-  GRASS: G.CURB_H + 0.02,
-  PATH: G.CURB_H + 0.02,
+  WALK: CURB_HEIGHT,
+  GRASS: CURB_HEIGHT + 0.02,
+  PATH: CURB_HEIGHT + 0.02,
   OUTER: -0.05,
   FAR_SHORE: 1.2,
-  WATER: G.WATER_Y,
+  WATER: WATER_Y,
 };
 export const PIERS = [];
 export const PILE_FIELDS = []; // (coast r1) remnant pile fields {side, z0, z1}: the shoreline fill stays out of them
@@ -94,6 +101,7 @@ export function terrainHeight(x, z) {
 // ------------------------------------------------------------------ asphalt
 export function createAsphaltMaterial(T) {
   const quality = getQuality();
+  if (usesNodeMaterialBackend()) return createAsphaltNodeMaterial(T, quality);
   const roadDetailLevel = quality.name === "low" ? 0 : quality.name === "med" ? 1 : 2;
   const roadDetailDistance = quality.name === "low" ? 0 : quality.name === "med" ? 190 : 700;
   const mat = new THREE.MeshStandardMaterial({
@@ -137,6 +145,7 @@ export function createAsphaltMaterial(T) {
 
 // ------------------------------------------------------------------ sidewalk (top: slabs + granite curb edge ; sides: curb face)
 export function createSidewalkMaterial(T) {
+  if (usesNodeMaterialBackend()) return createSidewalkNodeMaterial(T);
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.85,
@@ -1083,6 +1092,7 @@ function pondWind(w) {
 export function createGrassMaterial(T, opts = {}) {
   // (coast r2) opts.lawn: the same lawn shader for plain lawns outside Central Park (meadow everywhere, no ball fields / ponds / woodland floor)
   const quality = getQuality();
+  if (usesNodeMaterialBackend()) return createGrassNodeMaterial(T, quality, opts);
   const grassDetailLevel = quality.name === "low" ? 0 : 1;
   const grassDetailDistance = quality.name === "med" ? 360 : 900;
   const mat = new THREE.MeshStandardMaterial({

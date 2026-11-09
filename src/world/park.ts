@@ -10,6 +10,9 @@ import parkFragmentShader from "./shaders/fragment/park-reflection.frag?raw";
 //   - Manhattan-schist rock outcrops (stacked pale-grey slabs) at meadow edges and in the woods (refs 08 / 09)
 // Everything is drawn with the city facade material (one FacadeBuilder mesh) and has exact box / cylinder collision.
 import * as THREE from "three";
+import * as WEBGPU from "three/webgpu";
+import * as TSL from "three/tsl";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { mulberry32, parkWaterAt, PARK_WATER } from "./layout.ts";
 import { CURB_HEIGHT, PARK_BOUNDS } from "./layoutConstants.ts";
 import { PARK_MEADOWS, PARK_ROCKS, PARK_SITES, meadowDist } from "./parkData.ts";
@@ -19,6 +22,13 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { nightK } from "../render/daynight.ts"; // (night) lamp globes glow at night
 import { cityLights } from "../render/citylights.ts"; // (night) park lamps are real lights
 import { getQuality } from "../render/quality.ts";
+import {
+  createParkChainlinkNodeMaterial,
+  createParkCopingNodeMaterial,
+  createParkGlassRoofNodeMaterial,
+  createParkHexPaverNodeMaterial,
+  createParkWalkwayNodeMaterial,
+} from "./parkNodes.ts";
 
 export { PARK_ROCKS, PARK_SITES } from "./parkData.ts";
 
@@ -1708,6 +1718,7 @@ export function buildPark({
 // (park r2) skylight glazing: reflective panes in a steel mullion grid (1.6 m x 3.2 m), a few frosted / dirty panes,
 // faint interior glow; uv = metres along (long axis, short axis)
 function glassRoofMaterial() {
+  if (usesNodeMaterialBackend()) return createParkGlassRoofNodeMaterial();
   const mat = new THREE.MeshStandardMaterial({
     color: 0x8fa2b0,
     roughness: 0.1,
@@ -1814,14 +1825,16 @@ function buildReservoirEdge(scene, S) {
         ix[t + 2] = q;
       }
     }
-    const m = new THREE.MeshStandardMaterial({
+    const m = usesNodeMaterialBackend()
+      ? createParkCopingNodeMaterial(0x69665f)
+      : new THREE.MeshStandardMaterial({
       color: 0x69665f,
       roughness: 0.9,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
     });
-    m.onBeforeCompile = (sh) => {
+    if (!usesNodeMaterialBackend()) m.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader
         .replace(
           "#include <map_fragment>",parkShader.fragmentMapByCopingUv,
@@ -2288,7 +2301,9 @@ function buildBallfields(scene, S, box = null) {
   g.setAttribute("uv", new THREE.Float32BufferAttribute(UV, 2));
   g.setIndex(I);
   g.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({
+  const mat = usesNodeMaterialBackend()
+    ? createParkChainlinkNodeMaterial()
+    : new THREE.MeshStandardMaterial({
     color: 0x8a8d8e,
     roughness: 0.5,
     metalness: 0.6,
@@ -2296,7 +2311,7 @@ function buildBallfields(scene, S, box = null) {
     transparent: true,
     depthWrite: false,
   });
-  mat.onBeforeCompile = (sh) => {
+  if (!usesNodeMaterialBackend()) mat.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>",parkShader.vertexCommonByFountainUv)
       .replace("#include <uv_vertex>",parkShader.vertexUvVertexByFountainUv);
@@ -2615,14 +2630,16 @@ function buildParkEdge(scene, S) {
     ),
   );
   g.setIndex(I);
-  const m = new THREE.MeshStandardMaterial({
+  const m = usesNodeMaterialBackend()
+    ? createParkHexPaverNodeMaterial(0x575754)
+    : new THREE.MeshStandardMaterial({
     color: 0x575754,
     roughness: 0.9,
     polygonOffset: true,
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -4,
   });
-  m.onBeforeCompile = (sh) => {
+  if (!usesNodeMaterialBackend()) m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>",parkShader.vertexCommonByHexWorldPosition)
       .replace(
@@ -2935,22 +2952,96 @@ function buildWaterShallows(scene) {
   g.setAttribute("position", new THREE.Float32BufferAttribute(P, 3));
   g.setAttribute("aT", new THREE.Float32BufferAttribute(A, 1));
   g.setIndex(I);
-  const m = new THREE.ShaderMaterial({
-    glslVersion: THREE.GLSL3,
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    fog: true,
-    uniforms: THREE.UniformsUtils.merge([
-      THREE.UniformsLib.fog,
-      { uTime: { value: 0 } },
-    ]),
-    vertexShader: parkVertexShader,
-    fragmentShader: parkFragmentShader,
-  });
-  m.userData.tick = (dt) => {
-    m.uniforms.uTime.value += dt;
-  };
+  let m;
+  if (usesNodeMaterialBackend()) {
+    const time = TSL.uniform(0);
+    const pos = TSL.positionWorld;
+    const waterT = TSL.varying(TSL.attribute("aT", "float"), "vWaterT");
+    const coord = pos.xz;
+    const hash2 = (p) =>
+      TSL.fract(TSL.sin(TSL.dot(p, TSL.vec2(127.1, 311.7))).mul(43758.5453));
+    const valueNoise = (p) => {
+      const cell = TSL.floor(p);
+      const f = TSL.fract(p);
+      const blend = f.mul(f).mul(TSL.vec2(3).sub(f.mul(2)));
+      return TSL.mix(
+        TSL.mix(hash2(cell), hash2(cell.add(TSL.vec2(1, 0))), blend.x),
+        TSL.mix(
+          hash2(cell.add(TSL.vec2(0, 1))),
+          hash2(cell.add(TSL.vec2(1, 1))),
+          blend.x,
+        ),
+        blend.y,
+      );
+    };
+    const shoreline = valueNoise(coord.mul(0.18)).mul(0.6)
+      .add(valueNoise(coord.mul(0.7)).mul(0.4));
+    const wind = TSL.vec2(
+      TSL.dot(coord, TSL.vec2(0.8, 0.6)),
+      TSL.dot(coord, TSL.vec2(-0.6, 0.8)),
+    );
+    const patches = TSL.smoothstep(
+      0.45,
+      0.8,
+      valueNoise(wind.mul(TSL.vec2(0.02, 0.035)).add(time.mul(0.01))).mul(0.7)
+        .add(valueNoise(wind.mul(0.09)).mul(0.3)),
+    );
+    const ripples = valueNoise(
+      wind.mul(TSL.vec2(0.35, 1.3)).sub(TSL.vec2(time.mul(0.25), 0)),
+    ).mul(valueNoise(wind.mul(TSL.vec2(1.7, 4.1)).add(TSL.vec2(time.mul(0.6), 0))));
+    const viewDirection = TSL.normalize(TSL.cameraPosition.sub(pos));
+    const grazing = TSL.float(1).sub(viewDirection.y.clamp(0, 1));
+    const reflectedSky = TSL.mix(
+      TSL.vec3(0.26, 0.36, 0.48),
+      TSL.vec3(0.6, 0.66, 0.7),
+      TSL.pow(grazing, 1.6),
+    );
+    const waterColor = TSL.mix(
+      TSL.vec3(0.045, 0.068, 0.07),
+      reflectedSky,
+      TSL.float(0.1).add(TSL.pow(grazing, 2.4).mul(0.8)).add(patches.mul(0.2)),
+    );
+    const shelf = TSL.float(1).sub(
+      TSL.smoothstep(0, TSL.float(0.16).add(shoreline.mul(0.08)), waterT),
+    );
+    const bank = TSL.mix(
+      TSL.vec3(0.11, 0.1, 0.066),
+      waterColor,
+      TSL.smoothstep(0, 0.035, waterT),
+    );
+    const foam = TSL.float(1)
+      .sub(TSL.smoothstep(0, 0.03, waterT))
+      .mul(TSL.smoothstep(0.45, 0.7, valueNoise(coord.mul(0.9).add(time.mul(0.05)))));
+    m = new WEBGPU.MeshBasicNodeMaterial();
+    m.name = "ParkShallows.TSL";
+    m.colorNode = TSL.mix(bank, TSL.vec3(0.34, 0.35, 0.33), foam.mul(0.55))
+      .add(TSL.vec3(ripples.mul(0.018)));
+    m.opacityNode = TSL.float(0.62)
+      .add(patches.mul(0.2))
+      .add(grazing.mul(0.16))
+      .max(shelf.mul(0.8))
+      .clamp(0, 0.9);
+    m.transparent = true;
+    m.depthWrite = false;
+    m.side = WEBGPU.DoubleSide;
+    m.fog = true;
+    m.userData.tick = (dt) => { time.value += dt; };
+  } else {
+    m = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: true,
+      uniforms: THREE.UniformsUtils.merge([
+        THREE.UniformsLib.fog,
+        { uTime: { value: 0 } },
+      ]),
+      vertexShader: parkVertexShader,
+      fragmentShader: parkFragmentShader,
+    });
+    m.userData.tick = (dt) => { m.uniforms.uTime.value += dt; };
+  }
   const mesh = new THREE.Mesh(g, m);
   mesh.name = "park-water-shallows";
   mesh.renderOrder = 2;
@@ -3265,7 +3356,9 @@ function buildPathFurniture(scene, S, parkPaths) {
         ix[t + 2] = q;
       }
     }
-    const m = new THREE.MeshStandardMaterial({
+    const m = usesNodeMaterialBackend()
+      ? createParkWalkwayNodeMaterial(0x4d4b48)
+      : new THREE.MeshStandardMaterial({
       color: 0x4d4b48,
       roughness: 0.92,
       transparent: true,
@@ -3274,7 +3367,7 @@ function buildPathFurniture(scene, S, parkPaths) {
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -4,
     });
-    m.onBeforeCompile = (sh) => {
+    if (!usesNodeMaterialBackend()) m.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader
         .replace("#include <common>",parkShader.vertexCommonByWalkwayWorldPosition)
         .replace(

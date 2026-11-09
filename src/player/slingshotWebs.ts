@@ -55,7 +55,7 @@ export function createSlingWebs(scene, web) {
     update(dt, sling, events, rig, camera, renderer) {
       time += dt;
       const res = renderer.getDrawingBufferSize(_p2);
-      strands.mat.uniforms.uRes.value.set(res.x, res.y);
+      strands.setResolution(res.x, res.y);
       for (const e of events) {
         if (e.type === "slingAttach") web.splat?.(e.point, e.normal);
         if (e.type === "slingRelease")

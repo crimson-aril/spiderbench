@@ -44,6 +44,7 @@ type QualitySettings = {
 };
 
 type RendererCapabilitiesLike = {
+  isWebGPURenderer?: boolean;
   capabilities?: { maxTextures?: number };
 };
 
@@ -70,13 +71,16 @@ const QUALITY_PRESETS: Record<QualityPresetName, QualitySettings> = {
     cloudSteps: 8,
     cloudLightSteps: 1,
     envSize: 64,
+    // Low still needs temporal accumulation to resolve subpixel edges and the
+    // city's dithered LOD fades; skipping it makes those details shimmer.
     taa: true,
-    bloomLevels: 3,
+    bloomLevels: 1,
     dofTaps: 8,
-    motionBlurSamples: 3,
+    motionBlurSamples: 0,
     // At the low internal resolution, final-pass sharpening creates a light halo around high-contrast silhouettes.
     sharpen: 0,
-    charShadow: 0,
+    // Keep a small player-only cascade in Low so feet and roof contact do not look detached.
+    charShadow: 512,
     ssr: false,
     shafts: false,
     shaftSteps: 0,
@@ -189,7 +193,10 @@ function applyRenderLodScale() {
   if (!cachedQualitySettings || !cachedBaseQualitySettings) return;
   const quality = cachedQualitySettings;
   const base = cachedBaseQualitySettings;
-  const effectiveLodScale = Number(base.renderScale) * renderLodScale;
+  // Presets already provide their own LOD and traffic budgets. Apply only the
+  // user's resolution multiplier here; multiplying by the preset's renderScale
+  // as well made Low shorten all visibility distances a second time.
+  const effectiveLodScale = renderLodScale;
   quality.renderLodScale = effectiveLodScale;
   quality.baseLodScale = base.lodScale;
   quality.lodScale = base.lodScale * effectiveLodScale;
@@ -211,11 +218,17 @@ export function getQuality(
   renderer: RendererCapabilitiesLike | null = null,
 ): QualitySettings {
   if (cachedQualitySettings) return cachedQualitySettings;
-  let name: QualityPresetName =
-    renderer?.capabilities?.maxTextures != null &&
-    renderer.capabilities.maxTextures <= 16
-      ? "low"
-      : "high";
+  const maxTextures = renderer?.capabilities?.maxTextures;
+  let name: QualityPresetName;
+  if (maxTextures != null) name = maxTextures <= 16 ? "low" : "high";
+  else if (renderer?.isWebGPURenderer) {
+    // WebGPU deliberately does not expose VRAM size. Use the browser's coarse
+    // system-memory hint only as a starting point; the graphics menu and ?q=
+    // override remain authoritative for shared-memory and older GPUs.
+    const memory =
+      typeof navigator !== "undefined" ? (navigator as any).deviceMemory : 8;
+    name = memory <= 4 ? "low" : memory <= 8 ? "med" : "high";
+  } else name = "high";
   try {
     const requestedPresetParam = new URLSearchParams(location.search).get("q");
     const requestedPreset =

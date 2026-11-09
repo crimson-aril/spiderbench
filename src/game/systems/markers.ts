@@ -8,10 +8,88 @@ import waypointPillarFragment from "./shaders/fragment/waypoint-pillar.frag?raw"
 //   research towers (lattice mast + dish + beacon), backpacks (webbed to walls / roofs), subway entrances,
 //   waypoint light pillar, tower "district scan" pulse. ~12 draw calls total.
 import * as THREE from "three";
+import * as WEBGPU from "three/webgpu";
+import * as TSL from "three/tsl";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { usesNodeMaterialBackend } from "../../render/backendState.ts";
 
 const markersShader = lazyShaderSections(() => markersShaderSource);
+
+function materialUniforms(material) {
+  return material.userData?.nodeUniforms ?? material.uniforms;
+}
+
+function createColumnNodeMaterial({ color, tower = false }) {
+  const uniforms = {
+    uT: TSL.uniform(0),
+    uFade: TSL.uniform(1),
+    uCol: TSL.uniform(new THREE.Color(color)),
+  };
+  const coord = TSL.uv();
+  const h = coord.y;
+  const alpha = tower
+    ? TSL.pow(TSL.float(1).sub(h), 3)
+    : TSL.pow(TSL.float(1).sub(h), 2.2).mul(0.9).add(0.05);
+  const edge = tower
+    ? TSL.pow(TSL.abs(TSL.sin(coord.x.mul(Math.PI * 2))), 0.6)
+    : TSL.pow(TSL.abs(TSL.sin(coord.x.mul(Math.PI * 2))), 0.5);
+  const flow = tower
+    ? TSL.float(0.8).add(TSL.sin(h.mul(90).sub(uniforms.uT.mul(5))).mul(0.2))
+    : TSL.float(0.75).add(TSL.sin(h.mul(120).sub(uniforms.uT.mul(6))).mul(0.25));
+  const edgeWeight = tower
+    ? TSL.float(0.3).add(edge.mul(0.7))
+    : TSL.float(0.35).add(edge.mul(0.65));
+  const material = new WEBGPU.MeshBasicNodeMaterial();
+  material.name = tower ? "TowerBeam.TSL" : "WaypointColumn.TSL";
+  material.colorNode = uniforms.uCol
+    .mul(alpha)
+    .mul(flow)
+    .mul(edgeWeight)
+    .mul(uniforms.uFade);
+  material.transparent = true;
+  material.depthWrite = false;
+  material.blending = THREE.AdditiveBlending;
+  material.side = THREE.DoubleSide;
+  material.userData.nodeUniforms = uniforms;
+  return material;
+}
+
+function createColumnMaterial({ color, tower = false }) {
+  if (usesNodeMaterialBackend()) return createColumnNodeMaterial({ color, tower });
+  if (!tower) {
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      uniforms: { uT: { value: 0 }, uFade: { value: 1 } },
+      vertexShader: markerVertex,
+      fragmentShader:
+        color === 0xe92019
+          ? waypointPillarFragment.replace(
+              "vec3(1.6,1.05,0.25)",
+              markersShader.crimeOverlayColor,
+            )
+          : waypointPillarFragment,
+    });
+  }
+  return new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uT: { value: 0 },
+      uFade: { value: 1 },
+      uCol: { value: new THREE.Color(color) },
+    },
+    vertexShader: markerVertex,
+    fragmentShader: towerBeamFragment,
+  });
+}
 
 
 const _up = new THREE.Vector3(0, 1, 0),
@@ -356,7 +434,15 @@ export function createMarkers(scene, renderer) {
     roughness: 0.55,
     metalness: 0.35,
   });
-  const packMat = new THREE.MeshStandardMaterial({
+  const packMat = usesNodeMaterialBackend()
+    ? new WEBGPU.MeshStandardNodeMaterial({
+        vertexColors: true,
+        roughness: 0.75,
+        metalness: 0,
+        emissive: 0x5a6a80,
+        emissiveIntensity: 0,
+      })
+    : new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.75,
     metalness: 0.0,
@@ -364,30 +450,31 @@ export function createMarkers(scene, renderer) {
     emissiveIntensity: 0.0,
   });
   // make the web strands glow a touch (vertex colour > 0.85) so backpacks read from a distance
-  packMat.onBeforeCompile = (sh) => {
-    sh.uniforms.uGlow = packMat.userData.uGlow = packMat.userData.uGlow || {
-      value: 0.6,
+  if (usesNodeMaterialBackend()) {
+    const glow = TSL.uniform(0.6);
+    const vertexColor = TSL.vertexColor().rgb;
+    packMat.emissiveNode = TSL.select(
+      vertexColor.r.greaterThan(0.7),
+      TSL.vec3(0.75, 0.85, 1).mul(glow),
+      TSL.vec3(0),
+    );
+    packMat.userData.uGlow = glow;
+  } else {
+    packMat.onBeforeCompile = (sh) => {
+      sh.uniforms.uGlow = packMat.userData.uGlow = packMat.userData.uGlow || {
+        value: 0.6,
+      };
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", markersShader.fragmentCommon)
+        .replace("#include <emissivemap_fragment>", markersShader.fragmentEmissive);
     };
-    sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>", markersShader.fragmentCommon)
-      .replace("#include <emissivemap_fragment>", markersShader.fragmentEmissive);
-  };
-  packMat.customProgramCacheKey = () => "sys-backpack";
+    packMat.customProgramCacheKey = () => "sys-backpack";
+  }
 
   // ---------------- towers
   const towerGeo = towerGeometry();
   const towers = new Map();
-  const beamMat = (col) =>
-    new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      uniforms: { uT: { value: 0 }, uFade: { value: 1 }, uCol: { value: col } },
-      vertexShader: markerVertex,
-      fragmentShader: towerBeamFragment,
-    });
+  const beamMat = (col) => createColumnMaterial({ color: col, tower: true });
   const beamGeo = new THREE.CylinderGeometry(0.5, 0.5, 360, 16, 1, true);
   beamGeo.translate(0, 180, 0);
   const crownGeo = (() => {
@@ -553,7 +640,7 @@ export function createMarkers(scene, renderer) {
     if (!T) return;
     T.active = on;
     T.bm.emissive.set(on ? 0x6fd3ff : 0xff2020);
-    T.beam.material.uniforms.uCol.value.copy(on ? BLUE : RED);
+    materialUniforms(T.beam.material).uCol.value.copy(on ? BLUE : RED);
   }
   function flareTower(id) {
     const T = towers.get(id);
@@ -766,16 +853,7 @@ export function createMarkers(scene, renderer) {
   // ---------------- waypoint pillar
   const pillar = new THREE.Mesh(
     new THREE.CylinderGeometry(0.9, 0.9, 260, 24, 1, true),
-    new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      uniforms: { uT: { value: 0 }, uFade: { value: 1 } },
-      vertexShader: markerVertex,
-      fragmentShader: waypointPillarFragment,
-    }),
+    createColumnMaterial({ color: 0xffa826 }),
   );
   pillar.visible = false;
   pillar.frustumCulled = false;
@@ -791,11 +869,7 @@ export function createMarkers(scene, renderer) {
 
   // ---------------- crime scene: red light column + pulsing ground ring
   const crimeCol = pillar.clone();
-  crimeCol.material = pillar.material.clone();
-  crimeCol.material.fragmentShader = crimeCol.material.fragmentShader.replace(
-    "vec3(1.6,1.05,0.25)",
-    markersShader.crimeOverlayColor,
-  );
+  crimeCol.material = createColumnMaterial({ color: 0xe92019 });
   crimeCol.visible = false;
   root.add(crimeCol);
   const ring = new THREE.Mesh(
@@ -853,7 +927,7 @@ export function createMarkers(scene, renderer) {
           T.bm.emissiveIntensity = 14 + Math.sin(time * 2) * 4 + T.flare * 120;
         else T.bm.emissiveIntensity = time % 1.4 < 0.35 ? 60 : 3;
         T.crown.rotation.y = time * (T.active ? 0.6 : 0.25) + T.flare * 8;
-        const u = T.beam.material.uniforms;
+        const u = materialUniforms(T.beam.material);
         u.uT.value = time;
         const d = camera
           ? Math.hypot(
@@ -883,14 +957,15 @@ export function createMarkers(scene, renderer) {
         }
       }
       if (pillar.visible) {
-        pillar.material.uniforms.uT.value = time;
+        const u = materialUniforms(pillar.material);
+        u.uT.value = time;
         const d = camera
           ? Math.hypot(
               camera.position.x - pillar.position.x,
               camera.position.z - pillar.position.z,
             )
           : 999;
-        pillar.material.uniforms.uFade.value = THREE.MathUtils.smoothstep(
+        u.uFade.value = THREE.MathUtils.smoothstep(
           d,
           15,
           60,
@@ -899,14 +974,15 @@ export function createMarkers(scene, renderer) {
         pillar.scale.set(s, 1, s);
       }
       if (crimeCol.visible) {
-        crimeCol.material.uniforms.uT.value = time;
+        const u = materialUniforms(crimeCol.material);
+        u.uT.value = time;
         const d = camera
           ? Math.hypot(
               camera.position.x - crimeCol.position.x,
               camera.position.z - crimeCol.position.z,
             )
           : 999;
-        crimeCol.material.uniforms.uFade.value = THREE.MathUtils.smoothstep(
+        u.uFade.value = THREE.MathUtils.smoothstep(
           d,
           45,
           130,

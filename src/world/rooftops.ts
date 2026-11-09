@@ -29,6 +29,8 @@ import { GY } from "./ground.ts";
 import { batchTiles } from "./tilebatch.ts"; // (perf)
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import { getQuality } from "../render/quality.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createRoofNodeMaterial, createRoofStreakNodeMaterial } from "./rooftopsNodes.ts";
 
 const rooftopsShader = lazyShaderSections(() => rooftopsShaderSource);
 // retrying loader (ERR_INSUFFICIENT_RESOURCES must not abort the city)
@@ -97,6 +99,7 @@ const pick = (a, r) => a[Math.floor(r() * a.length)];
 // ------------------------------------------------------------------------------------------ textures
 
 function createRoofMaterial(tc, tn, noise) {
+  if (usesNodeMaterialBackend()) return createRoofNodeMaterial(tc, tn, noise);
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.9,
@@ -729,6 +732,7 @@ class StreakB {
   }
 }
 function createStreakMaterial(noise) {
+  if (usesNodeMaterialBackend()) return createRoofStreakNodeMaterial(noise);
   const m = new THREE.MeshBasicMaterial({
     color: 0xffffff,
     blending: THREE.MultiplyBlending,

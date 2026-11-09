@@ -17,6 +17,8 @@ import crowdFragmentShader from "./shaders/fragment/crowd-shadow.frag?raw";
 //    wave, cheer, point, clap; they step back when he lands close, dodge when he walks into them; world.alarm()
 //    makes them cower/flee.
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../../render/backendState.ts";
+import { createDogNodeMaterial, createPeopleNodeMaterial } from "./peopleNodes.ts";
 import { getQuality } from "../../render/quality.ts";
 import { assetUrl } from "../../assets.ts";
 import { loadKTX2TextureAsync } from "../../render/ktx2.ts";
@@ -360,6 +362,14 @@ function makeMaterials(animTex, meta, pedTex, bakeTex) {
     uNeck: { value: new THREE.Vector3(...meta.bones[3].head) },
     uHead: { value: new THREE.Vector3(...meta.bones[4].head) },
   };
+  if (usesNodeMaterialBackend()) {
+    return {
+      mat: createPeopleNodeMaterial(animTex, meta, uni, FACE_SKIN, pedTex),
+      depth: null,
+      dist: null,
+      uni,
+    };
+  }
   const common = crowdShader.pedestrianSkinningFunctions;
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.8, metalness: 0 });
   mat.onBeforeCompile = (sh) => {
@@ -405,24 +415,33 @@ function makeMaterials(animTex, meta, pedTex, bakeTex) {
 // ------------------------------------------------------------------ instanced pool per (variant, LOD)
 class PeoplePool {
   constructor(geo, mat, depth, max, shadow, name) {
-    this.mesh = new THREE.InstancedMesh(geo, mat, max);
-    this.mesh.customDepthMaterial = depth;
+    this.nodeBackend = usesNodeMaterialBackend();
+    this.mesh = this.nodeBackend
+      ? new THREE.Mesh(geo, mat)
+      : new THREE.InstancedMesh(geo, mat, max);
+    if (depth) this.mesh.customDepthMaterial = depth;
     this.mesh.name = name;
     this.mesh.count = 0;
+    if (this.nodeBackend) geo.instanceCount = 0;
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = shadow;
     this.mesh.receiveShadow = true;
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (this.mesh.instanceMatrix)
+      this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     // (perf r2) per-frame bounds of the live instances: three culls the whole pool per camera (main + each shadow
     // cascade) instead of drawing all ~23 variants x LODs in every cascade. userData.dynamic: csm must not cache its box
     this.mesh.frustumCulled = true;
     this.mesh.userData.dynamic = true;
     this.mesh.boundingSphere = new THREE.Sphere();
+    // Mesh culling reads geometry bounds; InstancedMesh reads this object bound.
+    if (this.nodeBackend) this.mesh.geometry.boundingSphere = this.mesh.boundingSphere;
     this.bb = new Float32Array(6);
-    // (perf r2) the 5 per-instance vec4s share ONE interleaved buffer (stride 20): 2 uploads per pool per frame, not 6
+    // The five animation/color vec4s share one buffer. TSL pools append compact
+    // transform fields there instead of binding an automatic instance matrix.
+    this.ibStride = this.nodeBackend ? 25 : 20;
     this.ib = new THREE.InstancedInterleavedBuffer(
-      new Float32Array(max * 20),
-      20,
+      new Float32Array(max * this.ibStride),
+      this.ibStride,
     ).setUsage(THREE.DynamicDrawUsage);
     ["iA", "iB", "iX", "iC", "iM"].forEach((k, j) =>
       geo.setAttribute(
@@ -430,34 +449,47 @@ class PeoplePool {
         new THREE.InterleavedBufferAttribute(this.ib, 4, j * 4),
       ),
     );
+    if (this.nodeBackend) {
+      geo.setAttribute("iTransform", new THREE.InterleavedBufferAttribute(this.ib, 4, 20));
+      geo.setAttribute("iYaw", new THREE.InterleavedBufferAttribute(this.ib, 1, 24));
+    }
     this.max = max;
     this.n = 0;
   }
   push(p, x, y, z) {
     if (this.n >= this.max) return;
-    const k = this.n++,
-      e = this.mesh.instanceMatrix.array,
-      o = k * 16;
-    const c = Math.cos(p.ry) * p.scale,
-      s = Math.sin(p.ry) * p.scale,
-      wx = 1,
-      wz = 1; // (peds r3) build is now the shader's girth (bodyShape), not a width scale
-    e[o] = c * wx;
-    e[o + 1] = 0;
-    e[o + 2] = -s * wx;
-    e[o + 3] = 0;
-    e[o + 4] = 0;
-    e[o + 5] = p.scale;
-    e[o + 6] = 0;
-    e[o + 7] = 0;
-    e[o + 8] = s * wz;
-    e[o + 9] = 0;
-    e[o + 10] = c * wz;
-    e[o + 11] = 0;
-    e[o + 12] = x;
-    e[o + 13] = y;
-    e[o + 14] = z;
-    e[o + 15] = 1;
+    const k = this.n++;
+    if (this.nodeBackend) {
+      const o = k * this.ibStride;
+      this.ib.array[o + 20] = x;
+      this.ib.array[o + 21] = y;
+      this.ib.array[o + 22] = z;
+      this.ib.array[o + 23] = p.scale;
+      this.ib.array[o + 24] = p.ry;
+    } else {
+      const e = this.mesh.instanceMatrix.array,
+        o = k * 16;
+      const c = Math.cos(p.ry) * p.scale,
+        s = Math.sin(p.ry) * p.scale,
+        wx = 1,
+        wz = 1; // (peds r3) build is now the shader's girth (bodyShape), not a width scale
+      e[o] = c * wx;
+      e[o + 1] = 0;
+      e[o + 2] = -s * wx;
+      e[o + 3] = 0;
+      e[o + 4] = 0;
+      e[o + 5] = p.scale;
+      e[o + 6] = 0;
+      e[o + 7] = 0;
+      e[o + 8] = s * wz;
+      e[o + 9] = 0;
+      e[o + 10] = c * wz;
+      e[o + 11] = 0;
+      e[o + 12] = x;
+      e[o + 13] = y;
+      e[o + 14] = z;
+      e[o + 15] = 1;
+    }
     const b = this.bb; // (perf r2) bounds
     if (k === 0) {
       b[0] = b[3] = x;
@@ -472,7 +504,7 @@ class PeoplePool {
       else if (z > b[5]) b[5] = z;
     }
     const I = this.ib.array,
-      q = k * 20,
+      q = k * this.ibStride,
       pA = p.A,
       pB = p.B,
       pc = p.cols; // (perf r2) iA iB iX iC iM, interleaved
@@ -502,6 +534,7 @@ class PeoplePool {
   }
   end() {
     this.mesh.count = this.n;
+    if (this.nodeBackend) this.mesh.geometry.instanceCount = this.n;
     this.mesh.visible = this.n > 0; // (citylife r1) empty pools cost no draw call / shadow pass
     // upload only the live instances. NB: a 0-length range must never reach bufferSubData (WebGL2 treats srcLength 0
     // as "to the end of the array" -> the whole buffer would upload every frame for empty pools)
@@ -516,17 +549,22 @@ class PeoplePool {
       );
       sp.radius = 0.5 * Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) + 2.0;
     }
-    this.mesh.instanceMatrix.clearUpdateRanges();
-    this.mesh.instanceMatrix.addUpdateRange(0, this.n * 16);
-    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceMatrix) {
+      this.mesh.instanceMatrix.clearUpdateRanges();
+      this.mesh.instanceMatrix.addUpdateRange(0, this.n * 16);
+      this.mesh.instanceMatrix.needsUpdate = true;
+    }
     this.ib.clearUpdateRanges();
-    this.ib.addUpdateRange(0, this.n * 20);
+    this.ib.addUpdateRange(0, this.n * this.ibStride);
     this.ib.needsUpdate = true; // (perf r2)
   }
 }
 
 function buildGeometry(bin, L) {
-  const g = new THREE.BufferGeometry();
+  const nodeBackend = usesNodeMaterialBackend();
+  const g = nodeBackend
+    ? new THREE.InstancedBufferGeometry()
+    : new THREE.BufferGeometry();
   g.setAttribute(
     "position",
     new THREE.BufferAttribute(new Float32Array(bin, L.pos, L.nv * 3), 3),
@@ -545,24 +583,36 @@ function buildGeometry(bin, L) {
     ra[i * 3 + 2] = opt ? opt[i] : 0;
   }
   g.setAttribute("aRA", new THREE.BufferAttribute(ra, 3));
-  g.setAttribute(
-    "aSI",
-    new THREE.BufferAttribute(new Uint8Array(bin, L.si, L.nv * 4), 4),
-  );
-  g.setAttribute(
-    "aSW",
-    new THREE.BufferAttribute(new Uint8Array(bin, L.sw, L.nv * 4), 4, true),
-  );
-  // (peds r2) bake-atlas uv + optional-part bit (older assets: zeros)
-  g.setAttribute(
-    "aUV",
-    L.uv !== undefined
-      ? new THREE.BufferAttribute(new Uint16Array(bin, L.uv, L.nv * 2), 2, true)
-      : new THREE.BufferAttribute(new Uint16Array(L.nv * 2), 2, true),
-  );
+  if (usesNodeMaterialBackend()) {
+    // WebGPU has a strict vertex-attribute limit. Pack each bone id and its
+    // normalized byte weight into one float channel, reducing two inputs to one.
+    const ids = new Uint8Array(bin, L.si, L.nv * 4);
+    const weights = new Uint8Array(bin, L.sw, L.nv * 4);
+    const packed = new Float32Array(L.nv * 4);
+    for (let i = 0; i < packed.length; i++)
+      packed[i] = ids[i]! * 256 + weights[i]!;
+    g.setAttribute("aBone", new THREE.Float32BufferAttribute(packed, 4));
+  } else {
+    g.setAttribute(
+      "aSI",
+      new THREE.BufferAttribute(new Uint8Array(bin, L.si, L.nv * 4), 4),
+    );
+    g.setAttribute(
+      "aSW",
+      new THREE.BufferAttribute(new Uint8Array(bin, L.sw, L.nv * 4), 4, true),
+    );
+    // (peds r2) bake-atlas uv + optional-part bit (older assets: zeros)
+    g.setAttribute(
+      "aUV",
+      L.uv !== undefined
+        ? new THREE.BufferAttribute(new Uint16Array(bin, L.uv, L.nv * 2), 2, true)
+        : new THREE.BufferAttribute(new Uint16Array(L.nv * 2), 2, true),
+    );
+  }
   g.setIndex(
     new THREE.BufferAttribute(new Uint16Array(bin, L.idx, L.nt * 3), 1),
   );
+  if (nodeBackend) g.instanceCount = 0;
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1, 0), 1.2);
   return g;
 }
@@ -574,43 +624,49 @@ function buildGeometry(bin, L) {
 function createDogs(scene, bin, D) {
   const PV = D.pivots,
     PT = D.parts;
-  const glsl = injectShader(
-    crowdShader.dogPoseFunctions,
-    PT.legFL,
-    PT.legFR,
-    PT.legBL,
-    PT.legBR,
-    PV.legFL.join(","),
-    PV.legFR.join(","),
-    PV.legBL.join(","),
-    PV.legBR.join(","),
-    PT.tail,
-    PV.tail.join(","),
-    PT.head,
-    PV.head.join(","),
-  );
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
-  mat.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", injectShader(crowdShader.vertexCommonDogPoseDeclarations, glsl))
-      .replace("#include <begin_vertex>", crowdShader.vertexBeginVertexDogPose);
-    sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>", crowdShader.fragmentCommonByDogPosition)
-      .replace("#include <color_fragment>", crowdShader.fragmentColorByDogPosition);
-  };
-  mat.customProgramCacheKey = () => "city-dog-v1";
-  const depth = new THREE.MeshDepthMaterial({
-    depthPacking: THREE.RGBADepthPacking,
-  });
-  depth.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", injectShader(crowdShader.vertexCommonDogSkinningFunctions, glsl))
-      .replace("#include <begin_vertex>", crowdShader.vertexBeginVertexDogPoseDepth);
-  };
-  depth.customProgramCacheKey = () => "city-dog-depth-v1";
-  const dist = new THREE.MeshDistanceMaterial(); // (night) city-light shadows (LOD0)
-  dist.onBeforeCompile = depth.onBeforeCompile;
-  dist.customProgramCacheKey = () => "city-dog-dist-v1";
+  const nodeBackend = usesNodeMaterialBackend();
+  let mat, depth = null, dist = null;
+  if (nodeBackend) {
+    mat = createDogNodeMaterial(D);
+  } else {
+    const glsl = injectShader(
+      crowdShader.dogPoseFunctions,
+      PT.legFL,
+      PT.legFR,
+      PT.legBL,
+      PT.legBR,
+      PV.legFL.join(","),
+      PV.legFR.join(","),
+      PV.legBL.join(","),
+      PV.legBR.join(","),
+      PT.tail,
+      PV.tail.join(","),
+      PT.head,
+      PV.head.join(","),
+    );
+    mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
+    mat.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", injectShader(crowdShader.vertexCommonDogPoseDeclarations, glsl))
+        .replace("#include <begin_vertex>", crowdShader.vertexBeginVertexDogPose);
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", crowdShader.fragmentCommonByDogPosition)
+        .replace("#include <color_fragment>", crowdShader.fragmentColorByDogPosition);
+    };
+    mat.customProgramCacheKey = () => "city-dog-v1";
+    depth = new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+    });
+    depth.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", injectShader(crowdShader.vertexCommonDogSkinningFunctions, glsl))
+        .replace("#include <begin_vertex>", crowdShader.vertexBeginVertexDogPoseDepth);
+    };
+    depth.customProgramCacheKey = () => "city-dog-depth-v1";
+    dist = new THREE.MeshDistanceMaterial(); // legacy GL city-light shadows
+    dist.onBeforeCompile = depth.onBeforeCompile;
+    dist.customProgramCacheKey = () => "city-dog-dist-v1";
+  }
   const MAXD = [60, 200];
   const pools = D.lods.map((L, li) => {
     const g = new THREE.BufferGeometry();
@@ -643,7 +699,7 @@ function createDogs(scene, bin, D) {
     ).setUsage(THREE.DynamicDrawUsage);
     g.setAttribute("iD", iD);
     const m = new THREE.InstancedMesh(g, mat, MAXD[li]);
-    m.customDepthMaterial = depth;
+    if (depth) m.customDepthMaterial = depth;
     m.name = "dogs-L" + li;
     m.count = 0;
     m.frustumCulled = false;
@@ -651,7 +707,7 @@ function createDogs(scene, bin, D) {
     m.receiveShadow = true;
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(m);
-    if (li === 0) cityLights.addCaster(m, dist); // (night)
+    if (li === 0 && dist) cityLights.addCaster(m, dist); // legacy GL city-light shadow caster
     return { m, iD, n: 0, max: MAXD[li] };
   });
   // leash: unit cylinder along +y, stretched between hand and collar
@@ -901,12 +957,17 @@ export async function createCrowd({
     BLOB_D = crowdPreset.blobDistance * scale;
     blobs?.setDistance(BLOB_D);
   };
+  const nodeBackend = usesNodeMaterialBackend();
   const [meta, bin, pedTex, bakeTex] = await Promise.all([
     fetch(assetUrl("city/npcs/people.json")).then((r) => r.json()),
     fetch(assetUrl("city/npcs/people.bin")).then((r) => r.arrayBuffer()),
-    loadPedAtlasTexture(), // photo faces / hair / fabric
-    loadKTX2TextureAsync(assetUrl("city/npcs/people_bake.ktx2"))
-      .catch(() => null), // (peds r2) Cycles cloth normal + AO
+    nodeBackend && quality.name === "low"
+      ? Promise.resolve(null)
+      : loadPedAtlasTexture(), // photo faces / fabric details only on medium/high node presets
+    nodeBackend
+      ? Promise.resolve(null)
+      : loadKTX2TextureAsync(assetUrl("city/npcs/people_bake.ktx2"))
+          .catch(() => null), // (peds r2) Cycles cloth normal + AO
   ]);
   if (
     !meta ||
@@ -960,12 +1021,16 @@ export async function createCrowd({
   const variants = meta.variants;
   const pools = variants.map((v, vi) =>
     v.lods.map((L, li) => {
+      const maxInstances = Math.max(
+        8,
+        Math.floor(LOD_MAX[li] * Math.max(populationScale, 0.1)),
+      );
       const p = new PeoplePool(
         buildGeometry(bin, L),
         mat,
         depth,
-        LOD_MAX[li],
-        li < 2,
+        maxInstances,
+        quality.name !== "low" && li < 2,
         `people-${v.name}-L${li}`,
       );
       // (perf r2) 23 variants x 2 LODs = 46 shadow draws per cascade -> 23: LOD0 (< 14 m) casts into cascades 0-1 only,
@@ -975,13 +1040,13 @@ export async function createCrowd({
         else if (li === 1) p.mesh.userData.minCascade = 1;
       }
       scene.add(p.mesh);
-      if (li === 0) cityLights.addCaster(p.mesh, dist); // (night) LOD0 (< 14 m) people cast city-light (lamp / headlight) shadows
+      if (li === 0 && dist) cityLights.addCaster(p.mesh, dist); // legacy GL city-light shadow caster
       return p;
     }),
   );
   const allPools = pools.flat();
   const dogs = meta.dog ? createDogs(scene, bin, meta.dog) : null; // (citylife r1) dog walkers
-  blobs = /[?&]noblob/.test(
+  blobs = usesNodeMaterialBackend() || /[?&]noblob/.test(
     typeof location !== "undefined" ? location.search : "",
   )
     ? null

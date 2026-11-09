@@ -7,9 +7,11 @@ import vehiclesShaderSource from "./shaders/glsl/vehicles.glsl?raw";
 import * as THREE from "three";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
+import { interleaveVertexAttributes } from "../render/vertexPacking.ts";
 
 import { MeshBuilder } from "./meshBuilder.ts";
 import { createPartMaterial, MATERIAL_PART } from "./partMaterials.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { buildRoads } from "./npc/roads.ts";
 import { createTraffic } from "./npc/traffic.ts";
 
@@ -444,14 +446,15 @@ export function loadVehicleModels(renderer) {
         g.setAttribute("aAO", new THREE.BufferAttribute(ao, 1));
         g.applyMatrix4(o.matrixWorld);
         g.computeBoundingSphere();
-        geos[o.name] = /^van(_l\d)?$/.test(o.name) ? vanRear(g) : g;
+        const geometry = /^van(_l\d)?$/.test(o.name) ? vanRear(g) : g;
+        geos[o.name] = interleaveVertexAttributes(geometry);
       });
       const atlasUrl = assetUrl("city/environmentTextures/vehicles_atlas2.ktx2");
       const atlas = await loadKTX2TextureAsync(atlasUrl);
       console.info("[city] vehicles_atlas2 loaded (KTX2)");
       atlas.colorSpace = THREE.SRGBColorSpace;
       atlas.flipY = false;
-      atlas.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      atlas.anisotropy = Math.min(8, renderer.getMaxAnisotropy?.() ?? 1);
       atlas.needsUpdate = true;
       return { geos, atlas };
     } catch (e) {
@@ -474,6 +477,7 @@ export function createVehicleMaterial({ name, map, physical = true }) {
     instanceTint: true,
     instanceState: true,
     physical,
+    vehicle: true,
     map,
     extraVertexDeclarations: vehiclesShader.vertexAttributeDeclarations,
     // (vehicles r2) taxi toppers map ad slot 0 (atlas2 u 0.5-0.75, v 0-170/2048); re-target one of 8 ad tiles per car
@@ -483,6 +487,9 @@ export function createVehicleMaterial({ name, map, physical = true }) {
     mat.clearcoat = 1.0;
     mat.clearcoatRoughness = 0.06;
   }
+  // The shared part-material node graph carries the vehicle paint, grime,
+  // clearcoat, glass, lights, and taxi-atlas behavior for WebGPU/WebGL2 TSL.
+  if (usesNodeMaterialBackend()) return mat;
   const base = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
     base(sh, r);

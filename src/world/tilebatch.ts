@@ -181,10 +181,10 @@ export function batchTiles(geoms, material, name, o = {}, centers = []) {
   for (const grp of groups) resolve(grp);
   // (perf r2) pre-upload: uploading a facade tile's vertex buffers (~15-20 MeshBuilder, 16 attributes) in the frame the tile
   // appears cost 100-150 ms hitches while swinging. warm(i) uploads ONE of the tile's buffers per call through a hidden
-  // helper mesh (empty draw range: three uploads a geometry's attributes when it projects a visible mesh; the GL buffer
-  // is cached per BufferAttribute, so the real tile reuses it). Returns false once everything is uploaded.
+  // helper mesh. A one-vertex draw uploads attributes without forming a primitive; the GPU buffer is cached per
+  // BufferAttribute, so the real tile reuses it. Returns false once everything is uploaded.
   const upG = new THREE.BufferGeometry();
-  upG.setDrawRange(0, 0);
+  upG.setDrawRange(0, 1);
   const upM = new THREE.Mesh(upG, UPLOAD_MAT);
   upM.name = name + " upload";
   upM.frustumCulled = false;

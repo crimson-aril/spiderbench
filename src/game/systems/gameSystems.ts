@@ -144,7 +144,7 @@ export function initSystems(ctx) {
     audio.setVolumes(s);
     const fpsLimit =
       s.fpsLimit === "auto"
-        ? ctx.renderer.capabilities.maxTextures <= 16
+        ? (ctx.renderer.capabilities?.maxTextures ?? 32) <= 16
           ? 30
           : 60
         : Number(s.fpsLimit);

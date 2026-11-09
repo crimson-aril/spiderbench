@@ -3,6 +3,9 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import flagsShaderSource from "./shaders/glsl/flags.glsl?raw";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { Pool } from "./pool.ts";
 import { linearColorFromHex } from "./meshBuilder.ts";
 
@@ -47,26 +50,49 @@ function flagGeometry() {
 }
 
 export function buildFlags({ scene, flags }) {
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.85,
-    side: THREE.DoubleSide,
-  });
   const uTime = { value: 0 };
-  mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uTime = uTime;
-    sh.vertexShader = sh.vertexShader
-      .replace(
-        "#include <common>",flagsShader.vertexCommon,
-      )
-      .replace(
-        "#include <color_vertex>",flagsShader.vertexColorVertex,
-      )
-      .replace(
-        "#include <begin_vertex>",flagsShader.vertexBeginVertex,
-      );
-  };
-  mat.customProgramCacheKey = () => "city-flag-v1";
+  let mat: any;
+  if (usesNodeMaterialBackend()) {
+    mat = new WEBGPU.MeshStandardNodeMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+    });
+    const time = TSL.uniform(0);
+    const local = TSL.positionLocal;
+    const waveAmount = local.x.sub(0.35).div(2.1).clamp(0, 1);
+    const phase = time.mul(5).sub(local.x.mul(2.6));
+    const wave = TSL.sin(phase).mul(0.16).add(
+      TSL.sin(phase.mul(1.7).add(1)).mul(0.05),
+    ).mul(waveAmount);
+    mat.positionNode = local.add(TSL.vec3(0, 0, wave));
+    // Pool's extra attribute is instanced; the geometry color keeps the bright
+    // cloth edge while aTint applies the flag's authored palette.
+    mat.colorNode = TSL.attribute("color", "vec3").mul(
+      TSL.attribute("aTint", "vec3"),
+    );
+    mat.userData.nodeTime = time;
+  } else {
+    mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+    });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = uTime;
+      sh.vertexShader = sh.vertexShader
+        .replace(
+          "#include <common>",flagsShader.vertexCommon,
+        )
+        .replace(
+          "#include <color_vertex>",flagsShader.vertexColorVertex,
+        )
+        .replace(
+          "#include <begin_vertex>",flagsShader.vertexBeginVertex,
+        );
+    };
+    mat.customProgramCacheKey = () => "city-flag-v1";
+  }
   const pool = new Pool(flagGeometry(), mat, {
     max: 200,
     far: 400,
@@ -85,6 +111,7 @@ export function buildFlags({ scene, flags }) {
     update(dt, cam) {
       t += dt;
       uTime.value = t;
+      if (mat.userData.nodeTime) mat.userData.nodeTime.value = t;
       pool.update(cam);
     },
   };

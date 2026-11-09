@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { JUNCTION_ISLES } from "./junctionIsles.ts"; // (layout2 r9) baked refuge islands (tools/gen_islands.mjs)
-import { CURB_HEIGHT, PARK_BOUNDS } from "./layoutConstants.ts";
+import { CURB_HEIGHT, PARK_BOUNDS, WATER_Y } from "./layoutConstants.ts";
 // Manhattan-island layout (pure data, no three.js objects).
 // Axes: +x = east, -z = north, y up, meters. Avenues run N-S (along z), streets run E-W (along x).
 //
@@ -48,7 +48,7 @@ export const G = {
   DRIVE_X1: 1e9, // (legacy: the old straight waterfront drive no longer exists)
   SEAWALL_X: 1e9,
   RIVER_X1: 1e9,
-  WATER_Y: -1.6,
+  WATER_Y,
   CURB_H: CURB_HEIGHT,
 };
 G.AV_HALF = G.AV_ROAD / 2;

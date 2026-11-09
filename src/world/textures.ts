@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
+import { getQuality } from "../render/quality.ts";
 
 const BASE = assetUrl("city/environmentTextures/");
 
@@ -20,7 +21,8 @@ function tex(image, { srgb = false, repeat = true, aniso = 8 } = {}) {
 }
 
 export async function loadCityTextures(renderer) {
-  const aniso = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+  const anisoCap = getQuality(renderer).name === "low" ? 2 : getQuality(renderer).name === "med" ? 6 : 16;
+  const aniso = Math.min(anisoCap, renderer.getMaxAnisotropy?.() ?? 1);
   const textureSources = {
     walls_col: "walls_col.ktx2",
     walls_nrm: "walls_nrm.ktx2",

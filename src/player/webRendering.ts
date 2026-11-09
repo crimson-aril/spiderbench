@@ -3,6 +3,8 @@ import webVertexShader from "./shaders/vertex/web-vert.vert?raw";
 import webFragmentShader from "./shaders/fragment/web-frag.frag?raw";
 // Web strand rendering (screen-space expanded AA ribbons) + thwip impact splats.
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createWebStrandNodeMaterial } from "./webStrandsNodes.ts";
 
 // Two-handed swing grip (animator -> web): when the free hand joins the line below the web hand, the strand is extended
 // past the web hand down to the second hand's grip (world-space offset from the web palm, weighted) so both fists sit on it.
@@ -32,12 +34,20 @@ const WEB_LOOK = {
   } /* (user r-venomweb2) a little thinner: 8.5 -> 6 cm */,
 };
 function styleStrands(S) {
-  const L = _venom ? WEB_LOOK.venom : WEB_LOOK.white,
-    u = S.mat.uniforms;
-  u.uColor.value.set(L.color);
-  u.uWidth.value = L.width * S.widthK;
-  u.uMinPx.value = L.minPx;
-  u.uVenom.value = _venom ? 1 : 0;
+  const L = _venom ? WEB_LOOK.venom : WEB_LOOK.white;
+  if (S.nodeUniforms) {
+    const u = S.nodeUniforms;
+    u.uColor.value.set(L.color);
+    u.uWidth.value = L.width * S.widthK;
+    u.uMinPx.value = L.minPx;
+    u.uVenom.value = _venom ? 1 : 0;
+  } else {
+    const u = S.mat.uniforms;
+    u.uColor.value.set(L.color);
+    u.uWidth.value = L.width * S.widthK;
+    u.uMinPx.value = L.minPx;
+    u.uVenom.value = _venom ? 1 : 0;
+  }
 }
 export function setWebVenom(on) {
   _venom = !!on;
@@ -97,28 +107,43 @@ export class Strands {
     g.setIndex(idx);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
     this.geo = g;
-    this.mat = new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      vertexShader: vert,
-      fragmentShader: frag,
-      transparent: true,
-      depthWrite: true,
-      side: THREE.DoubleSide, // depth so DoF/motion blur treat it as near geometry
-      uniforms: {
-        uRes: { value: new THREE.Vector2(1920, 1080) },
-        uWidth: { value: 0.022 },
-        uMinPx: { value: 2.0 },
-        uColor: { value: new THREE.Color(0xeef2f6) },
-        uOpacity: { value: 0.92 },
-        uVenom: { value: 0 },
-      },
-    });
+    if (usesNodeMaterialBackend()) {
+      const nodeStrand = createWebStrandNodeMaterial();
+      this.mat = nodeStrand.material;
+      this.nodeUniforms = nodeStrand.uniforms;
+    } else {
+      this.mat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: vert,
+        fragmentShader: frag,
+        transparent: true,
+        depthWrite: true,
+        side: THREE.DoubleSide, // depth so DoF/motion blur treat it as near geometry
+        uniforms: {
+          uRes: { value: new THREE.Vector2(1920, 1080) },
+          uWidth: { value: 0.022 },
+          uMinPx: { value: 2.0 },
+          uColor: { value: new THREE.Color(0xeef2f6) },
+          uOpacity: { value: 0.92 },
+          uVenom: { value: 0 },
+        },
+      });
+      this.nodeUniforms = null;
+    }
     _allStrands.add(this);
     styleStrands(this);
     this.mesh = new THREE.Mesh(g, this.mat);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 5;
     this.mesh.name = "WebStrands";
+  }
+  setResolution(width, height) {
+    const resolution = this.nodeUniforms?.uRes.value ?? this.mat.uniforms.uRes.value;
+    resolution.set(width, height);
+  }
+  setOpacity(value) {
+    if (this.nodeUniforms) this.nodeUniforms.uOpacity.value = value;
+    else this.mat.uniforms.uOpacity.value = value;
   }
   setStrand(si, pts, width = 1) {
     // pts: array of Vector3 length counts[si]+1 (or fewer => collapsed)
@@ -588,7 +613,7 @@ export function createWebSystem(scene) {
     update(dt, hand, camera, renderer, hand2 = null) {
       time += dt;
       const res = renderer.getDrawingBufferSize(_a);
-      strands.mat.uniforms.uRes.value.set(res.x, res.y);
+      strands.setResolution(res.x, res.y);
       drawActive(active, 0, hand, dt);
       drawActive(active2, SLOT2, hand2 || hand, dt);
       dying.forEach((d, di) => {
@@ -625,7 +650,7 @@ export function createWebSystem(scene) {
             fade,
           );
       });
-      strands.mat.uniforms.uOpacity.value = 0.92;
+      strands.setOpacity(0.92);
       strands.commit();
       for (const s of splats) {
         if (!s.m.visible) continue;

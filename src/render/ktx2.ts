@@ -1,4 +1,6 @@
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
+import * as THREE from "three";
+import { getQuality } from "./quality.ts";
 
 let loader: KTX2Loader | null = null;
 const texturePromises = new Map<string, ReturnType<KTX2Loader["loadAsync"]>>();
@@ -35,6 +37,21 @@ export function loadKTX2TextureAsync(sourceUrl: string) {
     pending = getKTX2Loader()
       .loadAsync(url)
       .then((texture) => {
+        // KTX2 mip data is supplied explicitly to the GPU. On the Low preset,
+        // drop the largest mip before upload so compressed textures occupy a
+        // smaller resident allocation instead of merely lowering screen size.
+        const quality = getQuality();
+        const skipMips = quality.name === "low" ? 1 : 0;
+        if (texture.isCompressedTexture && skipMips > 0 && texture.mipmaps.length > skipMips) {
+          texture.mipmaps = texture.mipmaps.slice(skipMips);
+          texture.image.width = texture.mipmaps[0].width;
+          texture.image.height = texture.mipmaps[0].height;
+          texture.minFilter = texture.mipmaps.length > 1
+            ? THREE.LinearMipmapLinearFilter
+            : THREE.LinearFilter;
+          texture.needsUpdate = true;
+          texture.userData.lowMipTrimmed = skipMips;
+        }
         loadedTextures.set(url, texture);
         return texture;
       })

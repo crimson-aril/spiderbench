@@ -1,5 +1,5 @@
 // @ts-nocheck
-// // createLighting({renderer, scene}) -> lighting
+//   createLighting({renderer, scene}) -> lighting
 //   lighting.sun            DirectionalLight carrying the key-light radiance (sun, or moon at night; cascade 0 of the CSM)
 //   lighting.update(camera) call once per frame before rendering (fits shadow cascades, re-bakes env if dirty,
 //                           follows the player with the high-res character shadow cascade)
@@ -24,6 +24,7 @@ import * as THREE from "three";
 import { getQuality } from "./quality.ts";
 import { createSky } from "./sky.ts";
 import { CascadedShadowMaps } from "./cascadedShadows.ts";
+import { usesNodeMaterialBackend, usesWebGPUBackend } from "./backendState.ts";
 import { installSurfaceChunks, ambShared } from "./surface.ts";
 import { cityLights, installCityLightChunks } from "./citylights.ts"; // (night) real local lights
 import { sunTransmittance } from "./atmosphere.ts";
@@ -351,25 +352,93 @@ const smooth = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 
+function createNodeShadowRig(scene, quality) {
+  const sun = new THREE.DirectionalLight(0xffffff, 1);
+  sun.name = "NodeSun";
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
+  sun.shadow.camera.left = -180;
+  sun.shadow.camera.right = 180;
+  sun.shadow.camera.top = 180;
+  sun.shadow.camera.bottom = -180;
+  sun.shadow.camera.near = 0.1;
+  sun.shadow.camera.far = quality.shadowFar * 2;
+  sun.shadow.camera.updateProjectionMatrix();
+  sun.shadow.bias = -0.00008;
+  sun.shadow.normalBias = 0.025;
+  // Keep WebGPU shadows readable in narrow streets and soften the hard edge
+  // from the single directional key light.
+  sun.shadow.intensity = 0.5;
+  sun.shadow.radius = 4.0;
+  sun.shadow.autoUpdate = true;
+  scene.add(sun, sun.target);
+
+  const direction = new THREE.Vector3(0.5, 0.7, 0.3).normalize();
+  const focus = new THREE.Vector3();
+  let hasFocusOverride = false;
+  return {
+    N: 1,
+    splits: quality.splits,
+    lights: [sun],
+    sun,
+    setSunDirection(next) {
+      direction.copy(next).normalize();
+      sun.shadow.needsUpdate = true;
+    },
+    setFocus(point) {
+      hasFocusOverride = !!point;
+      if (point) focus.copy(point);
+    },
+    setCharacter() {},
+    update(camera) {
+      if (!hasFocusOverride) camera.getWorldPosition(focus);
+      sun.target.position.copy(focus);
+      sun.position
+        .copy(focus)
+        .addScaledVector(direction, quality.shadowFar * 0.75);
+      sun.target.updateMatrixWorld();
+      sun.updateMatrixWorld();
+    },
+  };
+}
+
 export function createLighting({ renderer, scene }) {
+  const nodeBackend = usesNodeMaterialBackend();
+  // The procedural equirectangular DataTexture is converted to a PMREM by
+  // Three's WebGPU node-material path. In this scene that conversion makes
+  // otherwise valid lit materials render almost black, so keep the visible
+  // sky dome and direct/ambient lights but omit scene IBL on WebGPU.
+  const webGPUBackend = usesWebGPUBackend();
   const quality = getQuality(renderer);
-  installSurfaceChunks(quality);
-  const reversed = !!renderer.capabilities.reversedDepthBuffer;
+  if (!nodeBackend) installSurfaceChunks(quality);
+  // WebGLRenderer exposes the actual result of the reversed-depth extension
+  // through capabilities; WebGPURenderer is handled by the node shadow path.
+  const reversed = !!renderer.capabilities?.reversedDepthBuffer;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // hardware PCF (PCFSoft was removed in r18x)
   renderer.shadowMap.autoUpdate = true;
 
   const sky = createSky(renderer, quality);
-  const cascadedShadows = new CascadedShadowMaps({
-    scene,
-    quality,
-    reversed,
-    renderer,
-  });
-  installCityLightChunks(renderer, scene); // (night) after the CSM patch of lights_fragment_begin
+  if (nodeBackend) scene.add(sky.mesh);
+  const cascadedShadows = nodeBackend
+    ? createNodeShadowRig(scene, quality)
+    : new CascadedShadowMaps({ scene, quality, reversed, renderer });
+  if (!nodeBackend) installCityLightChunks(renderer, scene); // (night) after the CSM patch of lights_fragment_begin
+  else if (typeof location !== "undefined" && new URLSearchParams(location.search).has("nocl"))
+    cityLights.enabled = false;
   const sun = cascadedShadows.sun;
 
   scene.background = null;
+  const nodeAmbient = nodeBackend
+    // TSL materials do not use the legacy surface shader's environment fill.
+    // Balance direct sun with ambient and hemisphere sky/ground fill instead.
+    ? new THREE.AmbientLight(0xb8c4d8, 2.7)
+    : null;
+  const nodeHemisphere = nodeBackend
+    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 3.9)
+    : null;
+  if (nodeAmbient) scene.add(nodeAmbient);
+  if (nodeHemisphere) scene.add(nodeHemisphere);
   const fogBase = { density: 0.00013, heightFalloff: 1 / 300 }; // (timessq r6) falloff 1/420 -> 1/300: the extra day haze sits low in the street canyons, aerial views barely change // (foundation: was 0.0002 -> far shores / horizon bleached to a milky wall)
   const fog = {
     density: fogBase.density, // extinction per metre at ground level
@@ -415,7 +484,7 @@ export function createLighting({ renderer, scene }) {
   }; // glowCol / H / K: warm street-level glow layer (pipeline composite)
   const nightHaze = { k: 0, low: NH.low, high: NH.high, cfg: NH };
 
-  // ------------------------------------------------------------------ apply a time of day
+  //  apply a time of day
   // (daynight) everything is a continuous function of the sun elevation (keyframes in LOOK_KEYS), so the cycle never pops:
   //  - the sky LUT always follows the real sun (also below the horizon: twilight, then the multiple-scattering floor),
   //    faded to a dim moonlit night sky by skyTint
@@ -570,6 +639,8 @@ export function createLighting({ renderer, scene }) {
       city.ts * cl,
     ); // (night) LED-mix warm white (was sodium 0.5 / 0.17)
     scene.environmentIntensity = state.envIntensity;
+    if (nodeAmbient) nodeAmbient.intensity = lerp(2.7, 0.5, night);
+    if (nodeHemisphere) nodeHemisphere.intensity = lerp(3.9, 0.9, night);
     applyNightMaterials();
   }
 
@@ -597,11 +668,15 @@ export function createLighting({ renderer, scene }) {
     // keep the color normalised-ish so other agents that read sun.intensity see something sane
     const m = Math.max(sun.color.r, sun.color.g, sun.color.b, 1e-6);
     sun.color.multiplyScalar(1 / m);
-    sun.intensity = m;
+    // The latest WebGPU lit probe reads about 5.6 on sunlit bands against 1.0
+    // in shade. Keep the fill and shadow settings, and trim only the daytime
+    // key to bring the sunlit reading closer to 4.4. WebGL and moonlight retain
+    // their existing level.
+    sun.intensity = m * (webGPUBackend && !key.moon ? 0.74 : 1);
     if (env) state.envDirty = true;
   }
 
-  // ------------------------------------------------------------------ night: boost city emissives
+  //  night: boost city emissives
   // The city exposes facade uniforms (uInteriorGain / uShopGain) and uses emissive colours for lamps, signals and
   // car lights. We scale them at night (base values remembered on first sight).
   function scanNightMaterials() {
@@ -822,10 +897,15 @@ export function createLighting({ renderer, scene }) {
       blend.on = false;
       blend.envTail = 1;
     }
-    // env: one cube face per frame, PMREM on the 7th, repeated while blending + once after the end
-    if (blend.envStep < 0) blend.envStep = 0;
+    // Legacy renderers refresh the environment a cube face at a time. WebGPU
+    // skips this map because its automatic PMREM conversion darkens the scene.
+    if (!webGPUBackend && blend.envStep < 0) blend.envStep = 0;
   }
   function stepEnv() {
+    if (webGPUBackend) {
+      blend.envStep = -1;
+      return;
+    }
     if (blend.envStep < 0) return;
     if (blend.envStep < 6) sky.renderEnvFace(blend.envStep++);
     else {
@@ -846,7 +926,7 @@ export function createLighting({ renderer, scene }) {
   }
   setPreset(initial, { instant: true });
 
-  // ------------------------------------------------------------------ character shadow cascade target
+  //  character shadow cascade target
   const _pp = new THREE.Vector3();
 
   const lighting = {
@@ -933,17 +1013,25 @@ export function createLighting({ renderer, scene }) {
         applyNightMaterials();
       }
       if (state.envDirty) {
+        // WebGPU feeds this CPU-baked equirectangular sky directly to the
+        // TSL diffuse-fill fallback. Do not assign it as scene.environment:
+        // Three's automatic PMREM conversion is the part that darkens the
+        // WebGPU materials. The legacy WebGL2 renderer still uses its PMREM.
         state.envTexture = sky.renderEnv();
-        scene.environment = state.envTexture;
-
-        console.log("PMREM texture diagnostics:", {
-          mapping: state.envTexture.mapping,
-          width: state.envTexture.image?.width,
-          height: state.envTexture.image?.height,
-          isTexture: state.envTexture.isTexture,
-          isRenderTargetTexture: state.envTexture.isRenderTargetTexture,
-          image: state.envTexture.image,
-        });
+        if (!webGPUBackend) {
+          scene.environment = state.envTexture;
+          if (state.envTexture)
+            console.log("PMREM texture diagnostics:", {
+              mapping: state.envTexture.mapping,
+              width: state.envTexture.image?.width,
+              height: state.envTexture.image?.height,
+              isTexture: state.envTexture.isTexture,
+              isRenderTargetTexture: state.envTexture.isRenderTargetTexture,
+              image: state.envTexture.image,
+            });
+        } else {
+          scene.environment = null;
+        }
 
         scene.environmentIntensity = state.envIntensity;
         state.envDirty = false;
@@ -959,8 +1047,11 @@ export function createLighting({ renderer, scene }) {
           cascadedShadows.setCharacter(po);
       } else cascadedShadows.setFocus(null);
       cascadedShadows.update(camera, scene);
-      cityLights.build(camera); // (night) local light grid around the camera
-      {
+      if (nodeBackend) {
+        const nodeLightBudget = quality.name === "low" ? 4 : quality.name === "high" ? 16 : 8;
+        cityLights.buildNode(camera, scene, nodeLightBudget);
+      } else cityLights.build(camera); // (night) local light grid around the camera
+      if (!nodeBackend) {
         const o = cityLights.shared.origin;
         ambShared.cgrid.set(o.x, o.y, o.z * 64, o.w);
       }

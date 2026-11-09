@@ -11,7 +11,19 @@
 import { lazyShaderSections } from "../shaderSections.ts";
 import timesSquareShaderSource from "./shaders/glsl/times-square.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createTimesSquareAONodeMaterial,
+  createTimesSquareHaloNodeMaterial,
+  createTimesSquareNeonNodeMaterial,
+  createTimesSquarePaverNodeMaterial,
+  createTimesSquareRoadWearNodeMaterial,
+  createTimesSquareScreenNodeMaterial,
+  createTimesSquareShopNodeMaterial,
+} from "./timesSquareNodes.ts";
 import * as THREE from "three";
+import * as TSL from "three/tsl";
+import * as WEBGPU from "three/webgpu";
 import { assetUrl } from "../assets.ts";
 import { getLoadedKTX2Texture } from "../render/ktx2.ts";
 import { G, mulberry32, ZFIX } from "./layout.ts"; // (zfix) ZFIX: ?nozfix A/B
@@ -5198,6 +5210,7 @@ export function buildTimesSquare({ scene, gen }) {
   const adsTex = getAdvertisingAtlasTexture(),
     signTex = getSignAtlasTexture() /* (night r5) shared copy */,
     paveTex = loadTex(TEX + "ts_pavers.ktx2", { repeat: true, aniso: 16 });
+  const nodeBackend = usesNodeMaterialBackend();
   const dots = dotTexture();
   const add = (g, mat, name, shadow = false) => {
     if (!g) return null;
@@ -5208,8 +5221,9 @@ export function buildTimesSquare({ scene, gen }) {
     scene.add(m);
     return m;
   };
-  const screenMat = (map) =>
-    new THREE.MeshStandardMaterial({
+  const screenMat = (map) => nodeBackend
+    ? createTimesSquareScreenNodeMaterial(map)
+    : new THREE.MeshStandardMaterial({
       map,
       color: 0x2a2a2a,
       emissive: 0xffffff,
@@ -5224,7 +5238,7 @@ export function buildTimesSquare({ scene, gen }) {
   sm.userData.nightGain = 1;
   sm.defines = { ...sm.defines, CITYL_NOSPEC: "" }; // (night r11) no city-light specular on the LED faces (cityLights.ts)
   // LED panel micro-structure: faint pixel grid that fades out with distance (no moire far away)
-  sm.onBeforeCompile = (sh) => {
+  if (!nodeBackend) sm.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, scrUniforms());
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", injectShader(timesSquareShaderSections.fragmentCommon, SCR_GLSL_PARS))
@@ -5260,11 +5274,24 @@ export function buildTimesSquare({ scene, gen }) {
         timesSquareShaderSections.fragmentMap,
       );
     };
-    add(vin.build(), vm, "tsVinyl");
+    if (nodeBackend) {
+      const nodeMaterial = new WEBGPU.MeshStandardNodeMaterial({
+        map: adsTex,
+        vertexColors: true,
+        roughness: 0.62,
+        metalness: 0,
+        color: 0xe2e2e2,
+      });
+      nodeMaterial.name = "TimesSquareVinyl.TSL";
+      nodeMaterial.colorNode = TSL.texture(adsTex, TSL.uv()).rgb.mul(TSL.color(0xe2e2e2));
+      const night = TSL.uniform(nightK.value).onRenderUpdate((_, self) => { self.value = nightK.value; });
+      nodeMaterial.emissiveNode = TSL.texture(adsTex, TSL.uv()).rgb.mul(0.3).mul(night);
+      add(vin.build(), nodeMaterial, "tsVinyl");
+    } else add(vin.build(), vm, "tsVinyl");
   }
   {
     // (r6) contact AO cards (alpha-only darkening; keeps the target alpha = the pipeline's SSR weight)
-    const am = new THREE.MeshBasicMaterial({
+    const am = nodeBackend ? createTimesSquareAONodeMaterial(aoTexture()) : new THREE.MeshBasicMaterial({
       map: aoTexture(),
       vertexColors: true,
       transparent: true,
@@ -5274,7 +5301,7 @@ export function buildTimesSquare({ scene, gen }) {
       polygonOffsetFactor: -6,
       polygonOffsetUnits: -6,
     });
-    Object.assign(am, {
+    if (!nodeBackend) Object.assign(am, {
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.SrcAlphaFactor,
@@ -5282,7 +5309,7 @@ export function buildTimesSquare({ scene, gen }) {
       blendSrcAlpha: THREE.ZeroFactor,
       blendDstAlpha: THREE.OneFactor,
     });
-    am.onBeforeCompile = (sh) => {
+    if (!nodeBackend) am.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace(
         "#include <color_fragment>",
         timesSquareShaderSections.fragmentColor,
@@ -5294,11 +5321,12 @@ export function buildTimesSquare({ scene, gen }) {
       m.renderOrder = 3;
     }
   }
-  add(sgn.build(), screenNightMat(screenMat(signTex), "tsSigns"), "tsSigns"); // (night) screenNightMat: bright at night
+  const signMaterial = screenMat(signTex);
+  add(sgn.build(), nodeBackend ? signMaterial : screenNightMat(signMaterial, "tsSigns"), "tsSigns"); // night emissive
   {
     // (billboards r6) neon tube lettering: the sign atlas letters only (contrast vs the blurred board), tube hue from the
     // vertex colour with a whiter hot core; the board is discarded so the wall / raceway shows between the letters
-    const nm = new THREE.MeshStandardMaterial({
+    const nm = nodeBackend ? createTimesSquareNeonNodeMaterial(signTex) : new THREE.MeshStandardMaterial({
       color: 0x000000,
       emissive: 0xffffff,
       emissiveMap: signTex,
@@ -5308,14 +5336,14 @@ export function buildTimesSquare({ scene, gen }) {
       vertexColors: true,
       side: THREE.DoubleSide,
     });
-    nm.onBeforeCompile = (sh) => {
+    if (!nodeBackend) nm.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace(
         "#include <emissivemap_fragment>",
         timesSquareShaderSections.fragmentEmissiveSignLetterCutout,
       );
     };
     nm.customProgramCacheKey = () => "tsNeon";
-    screenNightMat(nm, "neon"); // (night)
+    if (!nodeBackend) screenNightMat(nm, "neon"); // (night)
     add(neo.build(), nm, "tsNeon");
   }
   add(
@@ -5334,7 +5362,9 @@ export function buildTimesSquare({ scene, gen }) {
     tt.wrapS = THREE.RepeatWrapping;
     const tm = add(
       tck.build(),
-      screenNightMat(
+      nodeBackend
+        ? screenMat(tt)
+        : screenNightMat(
         new THREE.MeshStandardMaterial({
           map: tt,
           color: 0x202020,
@@ -5401,11 +5431,11 @@ export function buildTimesSquare({ scene, gen }) {
     ht.magFilter = THREE.LinearFilter;
     ht.minFilter = THREE.LinearFilter;
     ht.needsUpdate = true;
-    const hm = sm2.clone();
-    hm.map = ht;
+    const hm = nodeBackend ? createTimesSquareHaloNodeMaterial(ht) : sm2.clone();
+    if (!nodeBackend) hm.map = ht;
     // (r10) fade the halo out when seen from above (it read as a bright cyan rectangle from swinging altitude):
     // full strength for views within ~17 deg of horizontal, gone by ~40 deg looking down
-    hm.onBeforeCompile = (sh) => {
+    if (!nodeBackend) hm.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader
         .replace("#include <common>", timesSquareShaderSections.vertexCommon)
         .replace("#include <project_vertex>", timesSquareShaderSections.vertexProjectVertex);
@@ -5413,7 +5443,7 @@ export function buildTimesSquare({ scene, gen }) {
         .replace("#include <common>", timesSquareShaderSections.fragmentCommonByHaloFade)
         .replace("#include <opaque_fragment>", timesSquareShaderSections.fragmentOpaque);
     };
-    hm.customProgramCacheKey = () => "tsHaloFade";
+    if (!nodeBackend) hm.customProgramCacheKey = () => "tsHaloFade";
     const mh = add(hal.build(), hm, "tsHalo");
     if (mh) {
       mh.receiveShadow = false;
@@ -5473,7 +5503,7 @@ export function buildTimesSquare({ scene, gen }) {
   {
     // (r6) interior mapping: each bay is a 5.5 m deep lit room (floor tiles, ceiling light panels, side walls, the shop
     // card on the back wall) ray-traced per pixel behind the reflective glass
-    const shm = new THREE.MeshStandardMaterial({
+    const shm = nodeBackend ? createTimesSquareShopNodeMaterial(shopTex) : new THREE.MeshStandardMaterial({
       map: shopTex,
       color: 0x303030,
       emissive: 0xffffff,
@@ -5483,7 +5513,7 @@ export function buildTimesSquare({ scene, gen }) {
       metalness: 0.0,
       vertexColors: true,
     });
-    shm.onBeforeCompile = (sh) => {
+    if (!nodeBackend) shm.onBeforeCompile = (sh) => {
       sh.vertexShader =
         timesSquareShaderSections.storefrontVertexPrefix +
         sh.vertexShader.replace("#include <project_vertex>", timesSquareShaderSections.vertexProjectVertexStorefront);
@@ -5517,7 +5547,7 @@ export function buildTimesSquare({ scene, gen }) {
       repeat: true,
       aniso: 8,
     });
-  const pm = new THREE.MeshStandardMaterial({
+  const pm = nodeBackend ? null : new THREE.MeshStandardMaterial({
     map: paveTex,
     normalMap: pavN,
     normalScale: new THREE.Vector2(0.9, 0.9),
@@ -5563,6 +5593,16 @@ export function buildTimesSquare({ scene, gen }) {
     }
     while (circ.length < 24) circ.push(new THREE.Vector4(0, 0, -1, 0));
   }
+  if (nodeBackend) {
+    add(pav.build(), createTimesSquarePaverNodeMaterial({
+      map: paveTex,
+      normalMap: pavN,
+      roughnessMap: pavR,
+      noise: noiseTex,
+      circles: circ,
+      edgeX: TS.plazaX,
+    }), "tsPavers");
+  } else {
   pm.onBeforeCompile = (sh) => {
     sh.uniforms.tMacro = { value: noiseTex };
     sh.uniforms.uCirc = { value: circ };
@@ -5572,6 +5612,7 @@ export function buildTimesSquare({ scene, gen }) {
       sh.fragmentShader.replace("#include <map_fragment>", timesSquareShaderSections.fragmentMapPaverGrime);
   };
   add(pav.build(), pm, "tsPavers");
+  }
   {
     // (r8) weathered, sun-bleached asphalt: a pale blotchy wash over every roadway in the square (director r7: 'the road
     // reads too dark vs the ref's sunlit pale grey'). Alpha-preserving blend (the pipeline reads alpha as SSR weight).
@@ -5594,6 +5635,14 @@ export function buildTimesSquare({ scene, gen }) {
     // (r11) critic r9: 'foreground asphalt flat, over-bright and washed out' -> the wash is now a darker grime / tyre
     // film (was a pale 0xaaa7a1 sun-bleach) with sparse pale dusty blotches kept only in the lightest noise fields
     const mkDust = (cwOnly) => {
+      if (nodeBackend) return createTimesSquareRoadWearNodeMaterial({
+        noise: noiseTex,
+        crosswalkOnly: cwOnly,
+        streetSpacing: G.ST_SP,
+        streetHalf: G.ST_HALF,
+        avenueHalf: G.AV_HALF,
+        towerX: TS.towerX,
+      });
       const dm2 = new THREE.MeshStandardMaterial({
         map: noiseTex,
         color: 0x5d5b57,

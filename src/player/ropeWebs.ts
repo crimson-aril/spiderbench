@@ -148,7 +148,7 @@ export function createRopeWebs(scene) {
     update(dt, ropes, hand, renderer) {
       time += dt;
       const res = renderer.getDrawingBufferSize(_a);
-      strands.mat.uniforms.uRes.value.set(res.x, res.y);
+      strands.setResolution(res.x, res.y);
       const n = ropes ? ropes.length : 0;
       for (let k = 0; k < SLOTS; k++) {
         const R = ropes && ropes[n - SLOTS + k]; // the newest SLOTS ropes

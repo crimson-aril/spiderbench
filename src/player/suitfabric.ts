@@ -21,6 +21,8 @@ import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import { addShaderPatch } from "../render/materials.ts";
 import { nightK } from "../render/daynight.ts";
 import { cityAmbient } from "../render/citylights.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createSuitNodeMaterial, setSuitNodeFabric } from "./suitNodeMaterial.ts";
 
 const suitfabricShader = lazyShaderSections(() => suitfabricShaderSource);
 
@@ -48,6 +50,11 @@ export const suitFabricReady = new Promise((r) => {
 });
 const sync = () => {
   uniforms.uFabOn.value = want && !fabOff && loaded === 2 ? 1 : 0;
+  setSuitNodeFabric(
+    !!uniforms.uFabOn.value,
+    uniforms.uFabHex.value,
+    uniforms.uFabKnit.value,
+  );
   if (loaded === 2) readyRes();
 };
 /** Advanced suit on/off (suits.ts). Off = the material renders exactly as the GLB (other suits do their own thing). */
@@ -72,6 +79,32 @@ function loadDetail(url, key) {
 }
 
 export function applySuitFabric(root) {
+  if (usesNodeMaterialBackend()) {
+    if (!uniforms.uFabHex.value && loaded === 0) {
+      loadDetail(assetUrl("player/suit_weave_hex.ktx2"), "uFabHex");
+      loadDetail(assetUrl("player/suit_weave_knit.ktx2"), "uFabKnit");
+    }
+    let selected = null;
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      const oldMaterials = Array.isArray(o.material) ? o.material : [o.material];
+      let changed = false;
+      const nextMaterials = oldMaterials.map((old) => {
+        if (old?.name !== "SpiderSuit") return old;
+        const nodeMaterial = createSuitNodeMaterial(old);
+        selected ||= nodeMaterial;
+        changed ||= nodeMaterial !== old;
+        return nodeMaterial;
+      });
+      if (changed) o.material = Array.isArray(o.material) ? nextMaterials : nextMaterials[0];
+    });
+    setSuitNodeFabric(
+      want && !fabOff && loaded === 2,
+      uniforms.uFabHex.value,
+      uniforms.uFabKnit.value,
+    );
+    return selected;
+  }
   let mat = null;
   root.traverse((o) => {
     if (!o.isMesh) return;

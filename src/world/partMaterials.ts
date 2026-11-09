@@ -5,12 +5,15 @@ import { nightK } from "../render/daynight.ts";
 import { injectShader } from "../render/shaderInjection.ts";
 import { lazyShaderSections } from "../shaderSections.ts";
 import partMaterialShaderSource from "./shaders/glsl/part-materials.glsl?raw";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createPartNodeMaterial } from "./partMaterialNodes.ts";
 
 type PartMaterialOptions = {
   name?: string;
   instanceTint?: boolean;
   instanceState?: boolean;
   physical?: boolean;
+  vehicle?: boolean;
   extraVertexDeclarations?: string;
   extraVertexSetup?: string;
   map?: object | null;
@@ -65,10 +68,22 @@ export function createPartMaterial({
   instanceTint = true,
   instanceState = false,
   physical = false,
+  vehicle = false,
   extraVertexDeclarations = "",
   extraVertexSetup = "",
   map = null,
 }: PartMaterialOptions = {}) {
+  if (usesNodeMaterialBackend()) {
+    return createPartNodeMaterial({
+      name,
+      instanceTint,
+      instanceState,
+      physical,
+      vehicle,
+      map,
+    });
+  }
+
   const materialOptions = {
     vertexColors: !map,
     map,

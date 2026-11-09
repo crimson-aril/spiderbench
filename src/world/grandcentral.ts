@@ -14,6 +14,12 @@ import { STYLE, LAYER } from "./facade.ts";
 import { registry } from "./npc/registry.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
 import { BIG_CASTER_LAYER } from "../render/cascadedShadows.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createGrandCentralGlassNodeMaterial,
+  createGrandCentralPodiumGlassNodeMaterial,
+  createGrandCentralStoneNodeMaterial,
+} from "./grandcentralNodes.ts";
 
 const grandcentralShader = lazyShaderSections(() => grandcentralShaderSource);
 
@@ -240,6 +246,7 @@ function wall(
 }
 
 function stoneMaterial(T) {
+  if (usesNodeMaterialBackend()) return createGrandCentralStoneNodeMaterial(T);
   const m = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.86,
@@ -276,6 +283,7 @@ function stoneMaterial(T) {
   return m;
 }
 function glassMaterial() {
+  if (usesNodeMaterialBackend()) return createGrandCentralGlassNodeMaterial();
   // (street r2) steel-framed glass with a real reflection term (metal-ish F0 + low roughness) over a parallax interior:
   // a second glazing layer 1.2 m in (walkway between the skins, its own mullion grid) and the concourse 30 m in (warm
   // lit hall, the far wall's arched windows, chandelier glows, marble floor) seen through the outer mullions.
@@ -2542,6 +2550,7 @@ export function buildGrandCentral({ scene, gen, T }) {
 // and a parallax office interior per bay (ceiling light rows in the lit bays, back wall with desk silhouettes, part-drawn
 // blinds). World-space: floor height FH from Y0, bay width BW along the face.
 function podiumGlassMaterial(Y0, FH, BW) {
+  if (usesNodeMaterialBackend()) return createGrandCentralPodiumGlassNodeMaterial(Y0, FH, BW);
   const m = new THREE.MeshStandardMaterial({
     color: 0x1c1d1c,
     roughness: 0.1,

@@ -9,6 +9,7 @@
 //  ui/hud.ts           createHud({player, world}) -> {update(dt), setVisible(b)}
 //  screenshotPresets.ts            SCREENSHOT_PRESETS[name] = {time?, apply(ctx)}  deterministic poses for screenshot/critique
 import * as THREE from "three";
+import * as WEBGPU from "three/webgpu";
 import { createPipeline } from "./render/pipeline.ts";
 import { createLighting } from "./render/lighting.ts";
 import { buildCity } from "./world/city.ts";
@@ -21,8 +22,12 @@ import { REFL_LAYER } from "./world/waterLayers.ts";
 import { BIG_CASTER_LAYER } from "./render/cascadedShadows.ts";
 import { configureKTX2Loader } from "./render/ktx2.ts";
 import { auditSceneTextures } from "./render/textureAudit.ts";
+import { setNodeMaterialBackend } from "./render/backendState.ts";
 
 const params = new URLSearchParams(location.search);
+// TSL captures node creation stacks only when enabled before scene materials
+// are built. Opt in with ?tsltrace=1 when investigating node graph warnings.
+if (params.has("tsltrace")) (WEBGPU.Node as any).captureStackTrace = true;
 const shotName = params.get("shot");
 // loading screen (index.html): stage labels + progress; it fades out once the first frames and the game systems are up
 const boot = window.__boot || { stage: async () => { }, sub() { }, done() { } };
@@ -46,12 +51,48 @@ type RuntimeContext = {
   manualStep?: boolean;
 };
 
-const renderer = new THREE.WebGLRenderer({
+const isWindows = typeof navigator !== "undefined" && (
+  (navigator as any).userAgentData?.platform === "Windows" || /^Win/i.test(navigator.platform)
+);
+const rendererOptions = {
   antialias: false,
-  powerPreference: "high-performance",
+  // Chromium ignores this WebGPU adapter hint on Windows. Leave it unset there
+  // so the browser chooses its default adapter without receiving an ineffective request.
+  ...(!isWindows ? { powerPreference: "high-performance" as const } : {}),
   stencil: false,
   reversedDepthBuffer: true,
-});
+};
+const webglRendererOptions = { ...rendererOptions, powerPreference: "high-performance" as const };
+let renderer: any;
+function useWebGPURenderer(nodeRenderer: any) {
+  renderer = nodeRenderer;
+  setNodeMaterialBackend(true, true);
+  console.info("[renderer] TSL materials on WebGPU");
+}
+function useLegacyWebGLRenderer(reason?: string) {
+  if (reason) console.warn(`[renderer] ${reason}; using legacy WebGL2`);
+  renderer = new THREE.WebGLRenderer(webglRendererOptions);
+  setNodeMaterialBackend(false, false);
+  console.info("[renderer] legacy WebGL2 material pipeline");
+}
+
+if (params.get("backend") === "webgl2") {
+  useLegacyWebGLRenderer();
+} else {
+  try {
+    const nodeRenderer = new WEBGPU.WebGPURenderer(rendererOptions);
+    await nodeRenderer.init();
+    if (nodeRenderer.backend?.isWebGLBackend) {
+      nodeRenderer.dispose();
+      useLegacyWebGLRenderer("WebGPU is unavailable");
+    } else {
+      useWebGPURenderer(nodeRenderer);
+    }
+  } catch (error) {
+    console.warn("[renderer] WebGPU initialization failed", error);
+    useLegacyWebGLRenderer("WebGPU initialization failed");
+  }
+}
 renderer.setPixelRatio(getRenderPixelRatio(renderer));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -62,7 +103,7 @@ configureKTX2Loader(renderer);
 // (zfix) three r186 negates only polygonOffsetFactor for the reversed depth buffer, so every decal's negative
 // polygonOffsetUnits ("pull toward the camera") pushed it AWAY: face-on (no depth slope, the factor term ~0) coplanar
 // decals lost / flickered against the surface below. Re-issue the offset with both terms negated.
-if (renderer.capabilities.reversedDepthBuffer && !params.has("nozfix")) {
+if (!renderer.isWebGPURenderer && renderer.capabilities.reversedDepthBuffer && !params.has("nozfix")) {
   const gl = renderer.getContext(),
     st = renderer.state,
     setMat = st.setMaterial;
@@ -94,7 +135,7 @@ await boot.stage("player");
 const player = await createPlayer({ scene, world, camera, input, renderer });
 await boot.stage("shaders");
 const hud = createHud({ player, world, camera });
-const pipeline = createPipeline({ renderer, scene, camera, lighting });
+const pipeline = await createPipeline({ renderer, scene, camera, lighting });
 // Run again from DevTools after viewing a new area to inspect textures loaded later.
 (window as any).auditSceneTextures = () => auditSceneTextures(renderer, scene);
 
@@ -136,7 +177,7 @@ window.__ctx = ctx;
 // of one by one later, each freezing the game for 0.2-6 s the first time its material came into view
 // (render/warmup.ts). ?nowarm = old behaviour (A/B)
 const warmup =
-  !shotName && !params.has("nowarm")
+  !renderer.isWebGPURenderer && !shotName && !params.has("nowarm")
     ? createWarmup(renderer, scene, camera, {
       mirrorLayers: [REFL_LAYER, BIG_CASTER_LAYER],
     })
@@ -160,7 +201,10 @@ const systemsReady = shotName
     .then(() => import("./game/combat/combat.ts"))
     .then((m) => m.initCombat(ctx))
     .catch((e) => console.error("[combat] init failed", e)) // combat (C5)
-    .then(() => warmup?.rescan()); // (perf r3) + the meshes the systems / combat added (trickled by warmup.step)
+    .then(() => {
+      pipeline.prepareMaterials?.();
+      return warmup?.rescan();
+    }); // include TSL materials created by systems as well as warmup meshes
 // the loading screen goes once the game systems (HUD, save position) are in and a few frames have been drawn
 systemsReady.then(async () => {
   boot.sub(0.8);
@@ -232,7 +276,7 @@ if (shotName) {
     cpuProfileStats.clear();
     cpuNextReport = now + 3000;
   }
-  let fpsLimit = renderer.capabilities.maxTextures <= 16 ? 30 : 60;
+  let fpsLimit = lighting.quality.name === "low" ? 30 : 60;
   let nextFrameAt = 0;
   let fpsVisible = false;
   let fpsFrameCount = 0;

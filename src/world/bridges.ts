@@ -21,6 +21,14 @@
 // Geometry is merged per material over all bridges: stone, deck, cables, steel (vertex colours: one draw for every
 // bridge), truss / railings (lattice shader) = 5 draw calls.
 import { lazyShaderSections } from "../shaderSections.ts";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import {
+  createBridgeCableNodeMaterial,
+  createBridgeDeckNodeMaterial,
+  createBridgeLatticeNodeMaterial,
+  createBridgeSteelNodeMaterial,
+  createBridgeStoneNodeMaterial,
+} from "./bridgeNodes.ts";
 import bridgesShaderSource from "./shaders/glsl/bridges.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { nightK, nightOnly } from "../render/daynight.ts"; // (daynight)
@@ -343,6 +351,7 @@ class Acc {
 
 // ------------------------------------------------------------------ materials
 function stoneMaterial(T) {
+  if (usesNodeMaterialBackend()) return createBridgeStoneNodeMaterial(T);
   const m = new THREE.MeshStandardMaterial({
     color: 0xa39a8a,
     roughness: 0.88,
@@ -369,6 +378,7 @@ function stoneMaterial(T) {
 }
 // steel (vertex colours = per-bridge paint; aEx.x = lamp-head glow at night)
 function steelMaterial() {
+  if (usesNodeMaterialBackend()) return createBridgeSteelNodeMaterial();
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     vertexColors: true,
@@ -396,6 +406,7 @@ function steelMaterial() {
   return m;
 }
 function cableMaterial() {
+  if (usesNodeMaterialBackend()) return createBridgeCableNodeMaterial();
   // cables / suspenders: fatten with distance so they never break up into sub-pixel dashes (keep ~1 px, read as
   // heavy catenaries from across the river instead of a faint wireframe)
   const m = new THREE.MeshStandardMaterial({
@@ -431,6 +442,7 @@ function cableMaterial() {
 // lattice (vertex colours). uv.y 0..1: truss web (u = along in panels): chords, posts every panel, X diagonals.
 // uv.y 2..3: railing (u = along / 2 m): top + mid + bottom rails, posts every 2 m, pickets every 12.5 cm.
 function latticeMaterial() {
+  if (usesNodeMaterialBackend()) return createBridgeLatticeNodeMaterial();
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     vertexColors: true,
@@ -455,6 +467,7 @@ function latticeMaterial() {
 // road outer half, mode): 1 road markings (edge lines, double yellow / lane dashes, tyre wear), 2 timber promenade
 // planks, 3 subway track bed (ballast + ties), 4 concrete walkway / median, 0 plain asphalt. Side faces: concrete.
 function deckMaterial(T) {
+  if (usesNodeMaterialBackend()) return createBridgeDeckNodeMaterial(T, LW);
   const m = new THREE.MeshStandardMaterial({ color: 0x75726c, roughness: 0.9 });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.tDC = { value: T.asphaltCol };

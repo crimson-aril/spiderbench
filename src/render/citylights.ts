@@ -320,6 +320,9 @@ const cityLights = {
   gain: 1,
   volume: 1,
   incremental: true,
+  get nodeLights() {
+    return nodeLightPool;
+  },
   stats: { lights: 0, cand: 0, cells: 0, maxCell: 0, ms: 0 },
   add(o) {
     const r = toRecord(o);
@@ -871,6 +874,142 @@ function build(camera) {
   };
 }
 
+// TSL/WebGPU path: use a small, bounded set of native lights. The legacy path
+// injects a clustered GLSL loop and integer textures; those are not shared with
+// NodeMaterials. A short native-light list keeps local night lighting while
+// avoiding the grid upload and its four-light shadow atlas on constrained GPUs.
+const nodeLightPool = [];
+const nodeLightTargets = [];
+const nodeRecords = new Array(16).fill(null);
+let nodeLightLayout = "";
+function buildNode(camera, scene, maxLights = 8) {
+  const spotSlots = Math.min(maxLights <= 4 ? 1 : maxLights <= 8 ? 2 : 4, maxLights);
+  const pointSlots = maxLights - spotSlots;
+  const layout = `${spotSlots}:${pointSlots}`;
+  if (layout !== nodeLightLayout) {
+    for (let i = 0; i < nodeLightPool.length; i++) {
+      scene.remove(nodeLightPool[i]);
+      if (nodeLightTargets[i]) scene.remove(nodeLightTargets[i]);
+    }
+    nodeLightPool.length = nodeLightTargets.length = 0;
+    nodeLightLayout = layout;
+    for (let i = 0; i < maxLights; i++) {
+      let light;
+      if (i < spotSlots) {
+        light = new THREE.SpotLight(0xffffff, 0, 0, Math.PI / 4, 0.35, 2);
+        const target = new THREE.Object3D();
+        target.name = `CityLight.TSL.Target.${i}`;
+        scene.add(target);
+        light.target = target;
+        nodeLightTargets[i] = target;
+      } else {
+        light = new THREE.PointLight(0xffffff, 0, 0, 2);
+        nodeLightTargets[i] = null;
+      }
+      light.castShadow = false;
+      light.name = `CityLight.TSL.${i}`;
+      // Empty slots only reserve a fixed night pool. Keep them out of daytime
+      // light graphs; zero-intensity placeholders contribute no lighting.
+      light.visible = false;
+      scene.add(light);
+      nodeLightPool[i] = light;
+    }
+  }
+  const k = nightK.value;
+  if (!cityLights.enabled || k < 0.01 || maxLights < 1) {
+    for (const light of nodeLightPool) {
+      light.intensity = 0;
+      light.visible = false;
+    }
+    cityLights.stats.nodeLights = 0;
+    cityLights.stats.lights = 0;
+    return;
+  }
+
+  camera.getWorldDirection(_cd);
+  const gl = Math.hypot(_cd.x, _cd.z) || 1;
+  const ahead = Math.min(210, 70 + 0.6 * Math.max(0, camera.position.y)) * Math.min(1, gl * 1.5);
+  const cx = camera.position.x + (_cd.x / gl) * ahead;
+  const cz = camera.position.z + (_cd.z / gl) * ahead;
+  const ox = cx - SPAN / 2;
+  const oz = cz - SPAN / 2;
+  const bx0 = Math.floor(ox / BUCKET);
+  const bx1 = Math.floor((ox + SPAN) / BUCKET);
+  const bz0 = Math.floor(oz / BUCKET);
+  const bz1 = Math.floor((oz + SPAN) / BUCKET);
+  camera.updateMatrixWorld();
+  _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _frustum.setFromProjectionMatrix(_pm);
+  cand.length = 0;
+  const considerNodeLight = (r) => {
+    const radius = r.rEff;
+    if (r.p[0] + radius < ox || r.p[0] - radius > ox + SPAN || r.p[2] + radius < oz || r.p[2] - radius > oz + SPAN) return;
+    _sph.center.set(r.p[0], r.p[1], r.p[2]);
+    _sph.radius = radius;
+    if (!_frustum.intersectsSphere(_sph)) return;
+    const dx = r.p[0] - camera.position.x;
+    const dy = r.p[1] - camera.position.y;
+    const dz = r.p[2] - camera.position.z;
+    r.pri = (r.lum * (r.day ? 1 : k)) / (dx * dx + dy * dy + dz * dz + 400);
+    cand.push(r);
+  };
+  for (let bx = bx0; bx <= bx1; bx++)
+    for (let bz = bz0; bz <= bz1; bz++) {
+      const bucket = buckets.get(bkey(bx, bz));
+      if (bucket) for (const r of bucket) considerNodeLight(r);
+    }
+  dynN = 0;
+  for (const provider of providers) {
+    try {
+      provider.fn(emit, camera);
+    } catch (error) {
+      console.warn("[citylights] provider", error);
+    }
+  }
+  for (let i = 0; i < dynN; i++) considerNodeLight(dyn[i]);
+  cand.sort((a, b) => b.pri - a.pri);
+  cityLights.stats.cand = cand.length;
+  for (let i = 0; i < maxLights; i++) nodeRecords[i] = null;
+  let spotsUsed = 0;
+  let pointsUsed = 0;
+  for (const r of cand) {
+    if (r.type === 1 && spotsUsed < spotSlots) nodeRecords[spotsUsed++] = r;
+    else if (r.type !== 1 && pointsUsed < pointSlots) nodeRecords[spotSlots + pointsUsed++] = r;
+    if (spotsUsed === spotSlots && pointsUsed === pointSlots) break;
+  }
+  for (let i = 0; i < maxLights; i++) {
+    const light = nodeLightPool[i];
+    const r = nodeRecords[i];
+    // Keep a stable light-node count through the night; only the whole pool
+    // enters or leaves the renderer's light graph at the day/night boundary.
+    light.visible = true;
+    if (!r) {
+      light.intensity = 0;
+      continue;
+    }
+    const scale = r.type === 2 ? Math.min(20, Math.max(1, 4 * r.hw * r.hh)) : 1;
+    const intensity = Math.max(r.c[0], r.c[1], r.c[2]) * scale * (r.day ? 1 : k) * cityLights.gain;
+    const channel = Math.max(r.c[0], r.c[1], r.c[2], 1e-5);
+    light.color.setRGB(r.c[0] / channel, r.c[1] / channel, r.c[2] / channel, THREE.LinearSRGBColorSpace);
+    light.intensity = intensity;
+    light.distance = r.range;
+    light.decay = 2;
+    light.position.set(r.p[0], r.p[1], r.p[2]);
+    if (light.isSpotLight) {
+      light.angle = Math.min(Math.PI / 2, Math.acos(THREE.MathUtils.clamp(r.cosO, -1, 1)));
+      const outer = Math.acos(THREE.MathUtils.clamp(r.cosO, -1, 1));
+      const inner = Math.acos(THREE.MathUtils.clamp(r.cosI, -1, 1));
+      light.penumbra = outer > 1e-4 ? THREE.MathUtils.clamp(1 - inner / outer, 0, 1) : 0;
+      const target = nodeLightTargets[i];
+      target.position.set(r.p[0] + r.d[0], r.p[1] + r.d[1], r.p[2] + r.d[2]);
+      target.updateMatrixWorld();
+    }
+  }
+  const activeNodeLights = spotsUsed + pointsUsed;
+  cityLights.stats.nodeLights = activeNodeLights;
+  cityLights.stats.lights = activeNodeLights;
+}
+
 // ------------------------------------------------------------------------------------------------ shadow slots
 const shCams = Array.from(
   { length: CL_SH_N },
@@ -1081,5 +1220,6 @@ cityLights.shadows = true;
 cityLights.shadowSlots = shSlots;
 cityLights.shadowRT = shadowRT; // debug
 cityLights.build = build;
+cityLights.buildNode = buildNode;
 cityLights.shared = cityLightsShared;
 export { cityLights };

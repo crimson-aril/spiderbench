@@ -91,9 +91,9 @@ d = remap(d, df * uCloudErode, 1.0, 0.0, 1.0);
     // (atmosphere r2) second, finer billow octave on the thin outer shell only: cauliflower lumps on the sunlit
     // tops / edges instead of airbrushed blobs (cheap: skipped in the dense core)
 if(d > 0.0 && d < 0.45) {
-vec4 dn2 = textureLod(uNoise, q * uCloudDetailScale * 3.1 + vec3(0.37, hf * 0.6, 0.11), 0.0);
+vec4 dn2 = textureLod(uNoise, q * uCloudDetailScale * 2.0 + vec3(0.37, hf * 0.6, 0.11), 0.0);
 float df2 = 1.0 - (dn2.g * 0.6 + dn2.b * 0.4);
-d = remap(d, df2 * 0.35 * (1.0 - d / 0.45), 1.0, 0.0, 1.0);
+d = remap(d, df2 * 0.16 * (1.0 - d / 0.45), 1.0, 0.0, 1.0);
 }
 }
 return clamp(d, 0.0, 1.0) * uCloudDensity;

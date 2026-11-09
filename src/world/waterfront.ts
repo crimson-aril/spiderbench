@@ -27,6 +27,8 @@ import { lazyShaderSections } from "../shaderSections.ts";
 import waterfrontShaderSource from "./shaders/glsl/waterfront.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
+import { usesNodeMaterialBackend } from "../render/backendState.ts";
+import { createCoastNodeMaterial } from "./waterfrontNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import {
@@ -53,12 +55,13 @@ import { cityLights } from "../render/citylights.ts"; // (night) the esplanade l
 import { approachRects } from "./bridges.ts";
 import { highwayRuns, HW } from "./highway.ts";
 import { FAR_LANDS, FAR_Y, farShoreHeight } from "./farshore.ts";
+import { CURB_HEIGHT, WATER_Y } from "./layoutConstants.ts";
 
 const waterfrontShader = lazyShaderSections(() => waterfrontShaderSource);
 
 
-const WALK = G.CURB_H,
-  WY = G.WATER_Y;
+const WALK = CURB_HEIGHT,
+  WY = WATER_Y;
 export const ST = { WALL: 0, PLAT: 1, RIP: 2, BULK: 3 };
 // props.ts reads the dressing spots (lamps / benches / trees) after buildWaterfront (city build order: ground -> props)
 export const COAST = {
@@ -378,6 +381,7 @@ const COL = {
 };
 
 function createCoastMaterial(T, atlas) {
+  if (usesNodeMaterialBackend()) return createCoastNodeMaterial(T, atlas, WY);
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.88,
@@ -473,7 +477,8 @@ export function buildWaterfront({
       tx.colorSpace = THREE.SRGBColorSpace;
       tx.anisotropy = 8;
       tx.needsUpdate = true;
-      mat.userData.uni.tAtlas.value = tx;
+      if (mat.userData.setAtlasTexture) mat.userData.setAtlasTexture(tx);
+      else mat.userData.uni.tAtlas.value = tx;
     })
     .catch((e) => console.warn("[coast] atlas", e.message));
 
