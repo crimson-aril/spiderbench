@@ -1,5 +1,7 @@
 # Spiderbench — a browser web-swinging game written by Claude
 
+- also visit webgpu branch for experimental webgpu support
+
 A non-commercial fan project and benchmark. It shows the kind of code and assets that **Claude** (Anthropic's AI model, working through Claude Code) can produce for a real-time 3D game running in the browser.
 
 The code, shaders, procedural city, Blender-built models and generated textures were produced by Claude under the direction of a human, who steered the work through feedback and reference images.
