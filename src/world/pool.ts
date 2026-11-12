@@ -2,7 +2,7 @@
 // Distance-culled instancing: one InstancedMesh per prop type; the instances near the camera
 // are repacked every time the camera moves a few metres (static props) or every frame (dynamic sets).
 import { lazyShaderSections } from "../shaderSections.ts";
-import poolShaderSource from "./shaders/glsl/pool.glsl?raw";
+import poolShaderSource from "./webgl2Shader/glsl/pool.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as TSL from "three/tsl";
 import * as THREE from "three";
@@ -21,10 +21,6 @@ const isViewWedgeDisabled = isPerformanceFeatureDisabled("nowedge");
 // over [a, b] and a far LOD fading in over the same [a, b] use complementary dither thresholds -> no hole, no double.
 // The distance is computed per vertex from the live camera, so fades are continuous even though pools only repack
 // after the camera has moved a few metres (pools include instances out to far + fade margin).
-const LOD_VERT_PARS = poolShader.lodVertexDeclarations;
-const LOD_VERT = poolShader.lodVertexFade;
-const LOD_FRAG_PARS = poolShader.lodFragmentDeclarations;
-const LOD_FRAG = poolShader.lodFragmentFade;
 // Keep module evaluation independent of the shadow module's initialization order.
 // Pools are imported throughout world construction, so the shared shadow state
 // may not be ready when this node graph is first created.
@@ -72,15 +68,22 @@ export function applyLodFade(mat) {
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
     sh.uniforms.uLodFrame = { value: cascadedShadowState.params };
+    // Read the raw GLSL lazily: Rolldown may place this module and its shader
+    // string in chunks that form an import cycle, leaving the binding undefined
+    // during module initialization.
+    const lodVertexDeclarations = poolShader.lodVertexDeclarations;
+    const lodVertexFade = poolShader.lodVertexFade;
+    const lodFragmentDeclarations = poolShader.lodFragmentDeclarations;
+    const lodFragmentFade = poolShader.lodFragmentFade;
     sh.vertexShader = sh.vertexShader
-      .replace("#include <common>",injectShader(poolShader.vertexCommon, LOD_VERT_PARS))
+      .replace("#include <common>",injectShader(poolShader.vertexCommon, lodVertexDeclarations))
       .replace(
-        "#include <project_vertex>",injectShader(poolShader.vertexProjectVertex, LOD_VERT),
+        "#include <project_vertex>",injectShader(poolShader.vertexProjectVertex, lodVertexFade),
       );
     sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>",injectShader(poolShader.fragmentCommon, LOD_FRAG_PARS))
+      .replace("#include <common>",injectShader(poolShader.fragmentCommon, lodFragmentDeclarations))
       .replace(
-        "#include <clipping_planes_fragment>",injectShader(poolShader.fragmentClipping, LOD_FRAG),
+        "#include <clipping_planes_fragment>",injectShader(poolShader.fragmentClipping, lodFragmentFade),
       );
   };
   mat.customProgramCacheKey = () =>

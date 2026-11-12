@@ -8,13 +8,13 @@
 // markings / median paint are coplanar decals (polygon offset). Median tree trunks get exact cylinders; crowns (foliage)
 // are not solid, like trees.ts.
 import { lazyShaderSections } from "../shaderSections.ts";
-import highwayShaderSource from "./shaders/glsl/highway.glsl?raw";
+import highwayShaderSource from "./webgl2Shader/glsl/highway.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { getQuality } from "../render/quality.ts";
 import * as THREE from "three";
 import { CURB_HEIGHT } from "./layoutConstants.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createHighwayNodeMaterial } from "./highwayNodes.ts";
+import { createHighwayNodeMaterial } from "./webGPUShaderNodes/highwayNodes.ts";
 import {
   G,
   shoreX,

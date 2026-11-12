@@ -24,11 +24,11 @@
 // Collision (C4): coastHeight(x, z) (ground.terrainHeight) is exact over the fill quads (promenade height), so the player
 // stands / runs on the new esplanade; off the outer edge it is water again and traversal's waterBounce still works.
 import { lazyShaderSections } from "../shaderSections.ts";
-import waterfrontShaderSource from "./shaders/glsl/waterfront.glsl?raw";
+import waterfrontShaderSource from "./webgl2Shader/glsl/waterfront.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createCoastNodeMaterial } from "./waterfrontNodes.ts";
+import { createCoastNodeMaterial } from "./webGPUShaderNodes/waterfrontNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import {

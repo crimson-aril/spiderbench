@@ -17,12 +17,12 @@
 // (public/city/environmentTextures/neon_words.webp, tools/imagegen/neon/pack.py), drawn only at night (nightOnly).
 // Tunables: window.__neon (NEON.gain, NEON.word, NEON.light ...; neon lights: __neon.relight()). ?noneon disables.
 import { lazyShaderSections } from "../shaderSections.ts";
-import neonShaderSource from "./shaders/glsl/neon.glsl?raw";
+import neonShaderSource from "./webgl2Shader/glsl/neon.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { createPlaceholderTexture } from "../render/placeholderTexture.ts";
-import { createNeonTubeNodeMaterial, createNeonWordNodeMaterial } from "./neonNodes.ts";
+import { createNeonTubeNodeMaterial, createNeonWordNodeMaterial } from "./webGPUShaderNodes/neonNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import * as LAY from "./layout.ts";

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import atmosphereGlsl from "./shaders/glsl/atmosphere.glsl?raw";
+import atmosphereGlsl from "./webgl2Shader/glsl/atmosphere.glsl?raw";
 // Atmosphere model shared by sky LUT, sky pass, env map and aerial-perspective fog.
 // Units: km inside the atmosphere model. Radiance is for a sun illuminance of 1; multiply by `uSkyScale`.
 import * as THREE from "three";

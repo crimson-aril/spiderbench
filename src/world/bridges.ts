@@ -28,8 +28,8 @@ import {
   createBridgeLatticeNodeMaterial,
   createBridgeSteelNodeMaterial,
   createBridgeStoneNodeMaterial,
-} from "./bridgeNodes.ts";
-import bridgesShaderSource from "./shaders/glsl/bridges.glsl?raw";
+} from "./webGPUShaderNodes/bridgeNodes.ts";
+import bridgesShaderSource from "./webgl2Shader/glsl/bridges.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { nightK, nightOnly } from "../render/daynight.ts"; // (daynight)
 import { cityLights } from "../render/citylights.ts"; // (night) real deck-lamp lighting

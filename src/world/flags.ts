@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Instanced building flags/banners hanging from angled poles, cloth wave in the vertex shader.
 import { lazyShaderSections } from "../shaderSections.ts";
-import flagsShaderSource from "./shaders/glsl/flags.glsl?raw";
+import flagsShaderSource from "./webgl2Shader/glsl/flags.glsl?raw";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";

@@ -5,7 +5,7 @@
 // Two pools (mound cards, grass cards) = 2 draws; distance-culled with a dithered fade out to ~200 m, shadows only in
 // the near cascade (<= 55 m). Replaces rooftops.ts' lumpy CanopyBatch blobs in beds / planters.
 import { lazyShaderSections } from "../shaderSections.ts";
-import roofplantsShaderSource from "./shaders/glsl/roofplants.glsl?raw";
+import roofplantsShaderSource from "./webgl2Shader/glsl/roofplants.glsl?raw";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";

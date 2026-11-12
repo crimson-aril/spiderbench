@@ -1,6 +1,6 @@
 import { lazyShaderSections } from "../shaderSections.ts";
-import sharedRenderingShaderSource from "./shaders/glsl/shared-rendering.glsl?raw";
-import fullscreenPassVertexShader from "./shaders/vertex/fullscreen.vert?raw";
+import sharedRenderingShaderSource from "./webgl2Shader/glsl/shared-rendering.glsl?raw";
+import fullscreenPassVertexShader from "./webgl2Shader/vertex/fullscreen.vert?raw";
 // Shared fullscreen rendering helpers, render targets, and common shader snippets.
 import * as THREE from "three";
 
@@ -109,11 +109,12 @@ export function createRenderTarget(
   return renderTarget;
 }
 
-// GLSL: reconstruct view-space position from a depth-texture sample. Works for standard and reversed depth.
-export const DEPTH_RECONSTRUCTION_GLSL =
+// Resolve these only when the GLSL pipeline requests them. Eager reads here can
+// observe an uninitialized ?raw binding in Rolldown's cyclic chunk graph.
+export const getDepthReconstructionGLSL = () =>
   sharedRenderingShaderSections.depthReconstruction;
 
-export const COLOR_SPACE_CONVERSION_GLSL =
+export const getColorSpaceConversionGLSL = () =>
   sharedRenderingShaderSections.colorSpaceConversion;
 
 export function haltonSequence(index: number, base: number): number {

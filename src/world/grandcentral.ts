@@ -5,7 +5,7 @@
 // (boxes / cylinders / ramps; arch heads stepped). MetLife: facade-builder masses (same facade shader as the city).
 // Exports GC_KEEP_OUT (props keep out), PARK_VIADUCT (lane closure / mast keep-out) for props.ts / traffic.
 import { lazyShaderSections } from "../shaderSections.ts";
-import grandcentralShaderSource from "./shaders/glsl/grandcentral.glsl?raw";
+import grandcentralShaderSource from "./webgl2Shader/glsl/grandcentral.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { G, ZFIX } from "./layout.ts"; // (zfix) ZFIX: ?nozfix A/B
@@ -19,7 +19,7 @@ import {
   createGrandCentralGlassNodeMaterial,
   createGrandCentralPodiumGlassNodeMaterial,
   createGrandCentralStoneNodeMaterial,
-} from "./grandcentralNodes.ts";
+} from "./webGPUShaderNodes/grandcentralNodes.ts";
 
 const grandcentralShader = lazyShaderSections(() => grandcentralShaderSource);
 

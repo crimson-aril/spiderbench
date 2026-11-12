@@ -14,7 +14,7 @@
 //    a little (creases).
 // Only active for the Advanced suit: game/systems/suits.ts turns it off for Iron / Symbiote (setSuitFabric).
 import { lazyShaderSections } from "../shaderSections.ts";
-import suitfabricShaderSource from "./shaders/glsl/suitfabric.glsl?raw";
+import suitfabricShaderSource from "./webgl2Shader/glsl/suitfabric.glsl?raw";
 import * as THREE from "three";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
@@ -22,7 +22,7 @@ import { addShaderPatch } from "../render/materials.ts";
 import { nightK } from "../render/daynight.ts";
 import { cityAmbient } from "../render/citylights.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createSuitNodeMaterial, setSuitNodeFabric } from "./suitNodeMaterial.ts";
+import { createSuitNodeMaterial, setSuitNodeFabric } from "./webGPUShaderNodes/suitNodeMaterial.ts";
 
 const suitfabricShader = lazyShaderSections(() => suitfabricShaderSource);
 

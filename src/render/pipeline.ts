@@ -1,22 +1,22 @@
 // @ts-nocheck
-import pipelineSsrFragmentShader from "./shaders/fragment/pipeline-ssr.frag?raw";
-import pipelineShaftsFragmentShader from "./shaders/fragment/pipeline-shafts.frag?raw";
-import pipelineCityVolumeFragmentShader from "./shaders/fragment/pipeline-cityvolume.frag?raw";
-import pipelineScreenSpaceGiFragmentShader from "./shaders/fragment/pipeline-ssgi.frag?raw";
-import pipelineSunVisibilityFragmentShader from "./shaders/fragment/pipeline-sunvis.frag?raw";
-import pipelineCompositeFragmentShader from "./shaders/fragment/pipeline-composite.frag?raw";
-import pipelineTaaFragmentShader from "./shaders/fragment/pipeline-taa.frag?raw";
-import depthOfFieldCocGlsl from "./shaders/glsl/depth-of-field-coc.glsl?raw";
-import pipelineDofPrefilterFragmentShader from "./shaders/fragment/pipeline-dofprefilter.frag?raw";
-import pipelineDofBokehFragmentShader from "./shaders/fragment/pipeline-dofbokeh.frag?raw";
-import pipelineDofTentFragmentShader from "./shaders/fragment/pipeline-doftent.frag?raw";
-import pipelineDofCombineFragmentShader from "./shaders/fragment/pipeline-dofcombine.frag?raw";
-import pipelineMotionBlurFragmentShader from "./shaders/fragment/pipeline-motionblur.frag?raw";
-import pipelineBloomDownFragmentShader from "./shaders/fragment/pipeline-bloomdown.frag?raw";
-import pipelineBloomUpFragmentShader from "./shaders/fragment/pipeline-bloomup.frag?raw";
-import pipelineAutoExposureFragmentShader from "./shaders/fragment/pipeline-autoexposure.frag?raw";
-import pipelineFinalFragmentShader from "./shaders/fragment/pipeline-final.frag?raw";
-import pipelineDebugBlitFragmentShader from "./shaders/fragment/pipeline-debugblit.frag?raw";
+import pipelineSsrFragmentShader from "./webgl2Shader/fragment/pipeline-ssr.frag?raw";
+import pipelineShaftsFragmentShader from "./webgl2Shader/fragment/pipeline-shafts.frag?raw";
+import pipelineCityVolumeFragmentShader from "./webgl2Shader/fragment/pipeline-cityvolume.frag?raw";
+import pipelineScreenSpaceGiFragmentShader from "./webgl2Shader/fragment/pipeline-ssgi.frag?raw";
+import pipelineSunVisibilityFragmentShader from "./webgl2Shader/fragment/pipeline-sunvis.frag?raw";
+import pipelineCompositeFragmentShader from "./webgl2Shader/fragment/pipeline-composite.frag?raw";
+import pipelineTaaFragmentShader from "./webgl2Shader/fragment/pipeline-taa.frag?raw";
+import depthOfFieldCocGlsl from "./webgl2Shader/glsl/depth-of-field-coc.glsl?raw";
+import pipelineDofPrefilterFragmentShader from "./webgl2Shader/fragment/pipeline-dofprefilter.frag?raw";
+import pipelineDofBokehFragmentShader from "./webgl2Shader/fragment/pipeline-dofbokeh.frag?raw";
+import pipelineDofTentFragmentShader from "./webgl2Shader/fragment/pipeline-doftent.frag?raw";
+import pipelineDofCombineFragmentShader from "./webgl2Shader/fragment/pipeline-dofcombine.frag?raw";
+import pipelineMotionBlurFragmentShader from "./webgl2Shader/fragment/pipeline-motionblur.frag?raw";
+import pipelineBloomDownFragmentShader from "./webgl2Shader/fragment/pipeline-bloomdown.frag?raw";
+import pipelineBloomUpFragmentShader from "./webgl2Shader/fragment/pipeline-bloomup.frag?raw";
+import pipelineAutoExposureFragmentShader from "./webgl2Shader/fragment/pipeline-autoexposure.frag?raw";
+import pipelineFinalFragmentShader from "./webgl2Shader/fragment/pipeline-final.frag?raw";
+import pipelineDebugBlitFragmentShader from "./webgl2Shader/fragment/pipeline-debugblit.frag?raw";
 import { injectShader } from "./shaderInjection.ts";
 // // createPipeline({renderer, scene, camera, lighting}) -> pipeline
 //   pipeline.render(dt)                 render one frame to the screen
@@ -36,13 +36,19 @@ import { injectShader } from "./shaderInjection.ts";
 //        DoF -> motion blur -> bloom -> final(CA, sharpen, ACES, grade, vignette, dither) -> screen
 import * as THREE from "three";
 import { N8AOPostPass } from "n8ao";
-import { FullscreenPass, createRenderTarget, DEPTH_RECONSTRUCTION_GLSL, COLOR_SPACE_CONVERSION_GLSL, haltonSequence } from "./fullscreenPass.ts";
-import { GLSL_SKY_COMMON } from "./sky.ts";
+import {
+  FullscreenPass,
+  createRenderTarget,
+  getDepthReconstructionGLSL,
+  getColorSpaceConversionGLSL,
+  haltonSequence,
+} from "./fullscreenPass.ts";
+import { getSkyShaderSections } from "./sky.ts";
 import { GpuProfiler } from "./profiler.ts";
 import {
   cityLights,
   cityLightsShared,
-  cityLightsGLSL,
+  getCityLightsGLSL,
   CL_SLOTS,
 } from "./citylights.ts"; // (night) local city lights: lit haze
 import { createGlassMirror } from "./glassmirror.ts"; // (render r-refl) player / cars / peds mirrored in facade glass
@@ -53,10 +59,14 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
   // pipeline. Effects are added here as their GLSL implementations are
   // migrated to TSL; WebGLRenderer continues to use the established path.
   if (renderer.isWebGPURenderer === true) {
-    const { createTslPipeline } = await import("./tslPipeline.ts");
+    const { createTslPipeline } = await import("./webGPUShaderNodes/tslPipeline.ts");
     return createTslPipeline({ renderer, scene, camera, lighting, quality: lighting.quality });
   }
 
+  const depthReconstructionGLSL = getDepthReconstructionGLSL();
+  const colorSpaceConversionGLSL = getColorSpaceConversionGLSL();
+  const skyCommonGLSL = getSkyShaderSections().commonAtmosphere;
+  const cityLightsGLSL = getCityLightsGLSL();
   const Q = lighting.quality;
   const reversed = !!renderer.capabilities.reversedDepthBuffer;
   const params = new URLSearchParams(location.search);
@@ -242,7 +252,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
     },
     fragmentShader: injectShader(
       pipelineSsrFragmentShader,
-      DEPTH_RECONSTRUCTION_GLSL,
+      depthReconstructionGLSL,
       THREE.ShaderChunk.cube_uv_reflection_fragment,
     ),
   });
@@ -281,7 +291,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uMaxT: { value: 180 },
       uStrength: { value: 1 },
     },
-    fragmentShader: injectShader(pipelineShaftsFragmentShader, DEPTH_RECONSTRUCTION_GLSL, GLSL_SKY_COMMON),
+    fragmentShader: injectShader(pipelineShaftsFragmentShader, depthReconstructionGLSL, skyCommonGLSL),
   });
 
   // ---------------------------------------------------------------- (night) lit haze around the city lights (half res)
@@ -316,7 +326,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
     // cell at its midpoint are integrated exactly over the segment for the inverse-square falloff:
     //   int dt / (h^2 + (t - tc)^2) = ( atan((t1 - tc) / h) - atan((t0 - tc) / h) ) / h
     // with the spot cone, range window and phase taken at 2 points of the segment.
-    fragmentShader: injectShader(pipelineCityVolumeFragmentShader, DEPTH_RECONSTRUCTION_GLSL, cityLightsGLSL),
+    fragmentShader: injectShader(pipelineCityVolumeFragmentShader, depthReconstructionGLSL, cityLightsGLSL),
   });
 
   // ---------------------------------------------------------------- SSGI (lighting2 r1: half-res screen-space one-bounce GI)
@@ -373,8 +383,8 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
     },
     fragmentShader: injectShader(
       pipelineScreenSpaceGiFragmentShader,
-      DEPTH_RECONSTRUCTION_GLSL,
-      GLSL_SKY_COMMON,
+      depthReconstructionGLSL,
+      skyCommonGLSL,
       THREE.ShaderChunk.cube_uv_reflection_fragment,
     ),
   });
@@ -390,7 +400,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uProjInv: { value: new THREE.Matrix4() },
       uAspect: { value: 1 },
     },
-    fragmentShader: injectShader(pipelineSunVisibilityFragmentShader, DEPTH_RECONSTRUCTION_GLSL),
+    fragmentShader: injectShader(pipelineSunVisibilityFragmentShader, depthReconstructionGLSL),
   });
 
   // ---------------------------------------------------------------- composite (sky + aerial perspective)
@@ -439,7 +449,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       },
       uNightMidLevel: { value: new THREE.Vector3(0.0062, 0.0068, 0.0105) }, // (night r6) blue mid-distance in-scatter // (night) warm street-level glow layer
     },
-    fragmentShader: injectShader(pipelineCompositeFragmentShader, DEPTH_RECONSTRUCTION_GLSL, GLSL_SKY_COMMON),
+    fragmentShader: injectShader(pipelineCompositeFragmentShader, depthReconstructionGLSL, skyCommonGLSL),
   });
 
   // ---------------------------------------------------------------- TAA
@@ -465,7 +475,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uMaskOn: { value: 0 },
       uObjDelta: { value: new THREE.Matrix4() },
     },
-    fragmentShader: injectShader(pipelineTaaFragmentShader, DEPTH_RECONSTRUCTION_GLSL, COLOR_SPACE_CONVERSION_GLSL),
+    fragmentShader: injectShader(pipelineTaaFragmentShader, depthReconstructionGLSL, colorSpaceConversionGLSL),
   });
 
   // ---------------------------------------------------------------- DoF (half-res gather bokeh)
@@ -489,8 +499,8 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
     },
     fragmentShader: injectShader(
       pipelineDofPrefilterFragmentShader,
-      DEPTH_RECONSTRUCTION_GLSL,
-      COLOR_SPACE_CONVERSION_GLSL,
+      depthReconstructionGLSL,
+      colorSpaceConversionGLSL,
       GLSL_COC,
     ),
   });
@@ -533,7 +543,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uProjInv: { value: new THREE.Matrix4() },
       uReversed: { value: reversed ? 1 : 0 },
     },
-    fragmentShader: injectShader(pipelineDofCombineFragmentShader, DEPTH_RECONSTRUCTION_GLSL, GLSL_COC),
+    fragmentShader: injectShader(pipelineDofCombineFragmentShader, depthReconstructionGLSL, GLSL_COC),
   });
 
   // ---------------------------------------------------------------- motion blur
@@ -560,7 +570,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uRes: { value: new THREE.Vector2(W, H) },
       uFrame: { value: 0 },
     },
-    fragmentShader: injectShader(pipelineMotionBlurFragmentShader, DEPTH_RECONSTRUCTION_GLSL),
+    fragmentShader: injectShader(pipelineMotionBlurFragmentShader, depthReconstructionGLSL),
   });
 
   // ---------------------------------------------------------------- bloom
@@ -571,7 +581,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uPx: { value: new THREE.Vector2() },
       uFirst: { value: 0 },
     },
-    fragmentShader: injectShader(pipelineBloomDownFragmentShader, COLOR_SPACE_CONVERSION_GLSL),
+    fragmentShader: injectShader(pipelineBloomDownFragmentShader, colorSpaceConversionGLSL),
   });
   const bloomUpPass = new FullscreenPass({
     name: "bloomUp",
@@ -691,7 +701,7 @@ export async function createPipeline({ renderer, scene, camera, lighting }) {
       uToe: { value: 0.45 },
       uRain: { value: 0 },
     },
-    fragmentShader: injectShader(pipelineFinalFragmentShader, COLOR_SPACE_CONVERSION_GLSL),
+    fragmentShader: injectShader(pipelineFinalFragmentShader, colorSpaceConversionGLSL),
   });
 
   // ---------------------------------------------------------------- debug view (pipeline.debug = {tex:'ssr'|'shafts'|'ao'|'scene', scale})

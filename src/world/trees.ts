@@ -1,9 +1,9 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import treesShaderSource from "./shaders/glsl/trees.glsl?raw";
+import treesShaderSource from "./webgl2Shader/glsl/trees.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
-import treesVertexShader from "./shaders/vertex/tree-shadow.vert?raw";
-import treesFragmentShader from "./shaders/fragment/tree-shadow.frag?raw";
+import treesVertexShader from "./webgl2Shader/vertex/tree-shadow.vert?raw";
+import treesFragmentShader from "./webgl2Shader/fragment/tree-shadow.frag?raw";
 // Autumn trees: branching trunks + dense alpha-tested leaf-cluster cards with spherical normals,
 // per-instance two-tone autumn tint, canopy self-occlusion. Two LODs per kind, instanced through distance pools.
 import * as THREE from "three";

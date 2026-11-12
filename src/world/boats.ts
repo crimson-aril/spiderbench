@@ -5,10 +5,10 @@
 // Cost: one InstancedMesh per hull type (5 draw calls) + one instanced wake quad (1 draw call). No collision (boats are
 // unreachable set dressing out on the water; the player never stands on them).
 import { lazyShaderSections } from "../shaderSections.ts";
-import boatsShaderSource from "./shaders/glsl/boats.glsl?raw";
+import boatsShaderSource from "./webgl2Shader/glsl/boats.glsl?raw";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createBoatWakeNodeMaterial } from "./boatNodes.ts";
+import { createBoatWakeNodeMaterial } from "./webGPUShaderNodes/boatNodes.ts";
 import { G, onLand, shoreX, mulberry32 } from "./layout.ts";
 import { farShoreHeight } from "./farshore.ts";
 import { REFL_LAYER } from "./waterLayers.ts";

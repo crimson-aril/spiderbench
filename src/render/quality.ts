@@ -46,7 +46,51 @@ type QualitySettings = {
 type RendererCapabilitiesLike = {
   isWebGPURenderer?: boolean;
   capabilities?: { maxTextures?: number };
+  backend?: {
+    isWebGPUBackend?: boolean;
+    device?: { limits?: { maxTextureDimension2D?: number } };
+  };
 };
+
+type RenderPixelRatioViewport = { width: number; height: number };
+
+const requestedRenderScales = new WeakMap<object, number>();
+
+function clampWebGPUPixelRatio(
+  renderer: RendererCapabilitiesLike | null,
+  pixelRatio: number,
+  viewport: RenderPixelRatioViewport,
+): number {
+  if (renderer?.backend?.isWebGPUBackend !== true) return pixelRatio;
+
+  const maxTextureDimension = renderer.backend.device?.limits?.maxTextureDimension2D;
+  const largestCssDimension = Math.max(viewport.width, viewport.height);
+  if (
+    typeof maxTextureDimension !== "number" ||
+    !Number.isFinite(maxTextureDimension) ||
+    maxTextureDimension <= 0 ||
+    largestCssDimension <= 0
+  ) {
+    return pixelRatio;
+  }
+
+  // Leave a little headroom for integer rounding and render targets derived
+  // from the swapchain size. WebGPU rejects textures larger than this limit.
+  const safePixelRatio = (maxTextureDimension * 0.98) / largestCssDimension;
+  return Math.min(pixelRatio, safePixelRatio);
+}
+
+function getRequestedRenderPixelRatio(
+  renderer: RendererCapabilitiesLike | null,
+  renderScale: number,
+): number {
+  const presetScale = getQuality(renderer).renderScale;
+  const currentDevicePixelRatio =
+    typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+  const maxTextures = renderer?.capabilities?.maxTextures;
+  const maxRenderPixelRatio = maxTextures != null && maxTextures <= 16 ? 0.8 : 1.5;
+  return Math.min(currentDevicePixelRatio, maxRenderPixelRatio) * presetScale * renderScale;
+}
 
 const QUALITY_PRESETS: Record<QualityPresetName, QualitySettings> = {
   low: {
@@ -287,14 +331,22 @@ export function getRenderPixelRatio(
   renderer: RendererCapabilitiesLike | null,
   renderScale = 1,
 ): number {
-  const presetScale = getQuality(renderer).renderScale;
-  const currentDevicePixelRatio =
-    typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
-  const maxTextures = renderer?.capabilities?.maxTextures;
-  const maxRenderPixelRatio = maxTextures != null && maxTextures <= 16 ? 0.8 : 1.5;
-  return (
-    Math.min(currentDevicePixelRatio, maxRenderPixelRatio) *
-    presetScale *
-    renderScale
-  );
+  if (renderer && typeof renderer === "object") {
+    requestedRenderScales.set(renderer, renderScale);
+  }
+  const requestedPixelRatio = getRequestedRenderPixelRatio(renderer, renderScale);
+  const viewport = {
+    width: typeof innerWidth === "number" ? innerWidth : 0,
+    height: typeof innerHeight === "number" ? innerHeight : 0,
+  };
+  return clampWebGPUPixelRatio(renderer, requestedPixelRatio, viewport);
+}
+
+export function getResizedRenderPixelRatio(
+  renderer: RendererCapabilitiesLike,
+  viewport: RenderPixelRatioViewport,
+): number {
+  const renderScale = requestedRenderScales.get(renderer) ?? 1;
+  const requestedPixelRatio = getRequestedRenderPixelRatio(renderer, renderScale);
+  return clampWebGPUPixelRatio(renderer, requestedPixelRatio, viewport);
 }

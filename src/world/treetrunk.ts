@@ -7,7 +7,7 @@
 // the image-generated bark array (public/city/environmentTextures/bark_col.webp / bark_nrm.webp, 3 layers: plane, oak, dark).
 // The same skeleton gives the cheaper mid / far LODs and the trunk collision capsule.
 import { lazyShaderSections } from "../shaderSections.ts";
-import treetrunkShaderSource from "./shaders/glsl/treetrunk.glsl?raw";
+import treetrunkShaderSource from "./webgl2Shader/glsl/treetrunk.glsl?raw";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";

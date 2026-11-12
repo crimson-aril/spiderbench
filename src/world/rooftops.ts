@@ -16,7 +16,7 @@
 // Contract: buildRooftops({ scene, gen, facadeMat, T }) -> Promise<{ update(camera), stats }>. Must run BEFORE the tile
 // facade meshes are built (it appends to gen.tiles' builders) and before props (props avoid our solids).
 import { lazyShaderSections } from "../shaderSections.ts";
-import rooftopsShaderSource from "./shaders/glsl/rooftops.glsl?raw";
+import rooftopsShaderSource from "./webgl2Shader/glsl/rooftops.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { assetUrl } from "../assets.ts";
@@ -30,7 +30,7 @@ import { batchTiles } from "./tilebatch.ts"; // (perf)
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";
 import { getQuality } from "../render/quality.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createRoofNodeMaterial, createRoofStreakNodeMaterial } from "./rooftopsNodes.ts";
+import { createRoofNodeMaterial, createRoofStreakNodeMaterial } from "./webGPUShaderNodes/rooftopsNodes.ts";
 
 const rooftopsShader = lazyShaderSections(() => rooftopsShaderSource);
 // retrying loader (ERR_INSUFFICIENT_RESOURCES must not abort the city)

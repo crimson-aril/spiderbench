@@ -1,13 +1,12 @@
 // @ts-nocheck
-import suitsMenuVertexShader from "./shaders/vertex/suit-preview.vert?raw";
-import suitsMenuFragmentShader from "./shaders/fragment/suit-preview.frag?raw";
+import suitsMenuVertexShader from "./webgl2Shader/vertex/suit-preview.vert?raw";
+import suitsMenuFragmentShader from "./webgl2Shader/fragment/suit-preview.frag?raw";
 // Suits screen: suit cards (left) + live 3D preview of Spider-Man (the game camera
 // orbits the frozen player on the right half; drag to rotate, shallow depth of field), equip applies instantly.
 import * as THREE from "three";
-import * as WEBGPU from "three/webgpu";
-import * as TSL from "three/tsl";
 import { usesNodeMaterialBackend } from "../../render/backendState.ts";
 import { SUITS } from "../../game/systems/suits.ts";
+import { createSuitCycloramaNodeMaterial } from "./webGPUShaderNodes/suitCyclorama.ts";
 
 function suitArt(s) {
   const [a, b, c] = s.swatch;
@@ -131,10 +130,7 @@ export function createSuitsPage(sys) {
     const g = new THREE.Group();
     g.name = "suit-stage";
     const cycloramaMaterial = usesNodeMaterialBackend()
-      ? new WEBGPU.MeshBasicNodeMaterial({
-          side: WEBGPU.BackSide,
-          depthWrite: true,
-        })
+      ? createSuitCycloramaNodeMaterial()
       : new THREE.ShaderMaterial({
           glslVersion: THREE.GLSL3,
           side: THREE.BackSide,
@@ -142,13 +138,6 @@ export function createSuitsPage(sys) {
           vertexShader: suitsMenuVertexShader,
           fragmentShader: suitsMenuFragmentShader,
         });
-    if (usesNodeMaterialBackend()) {
-      cycloramaMaterial.colorNode = TSL.mix(
-        TSL.vec3(0.012, 0.018, 0.04),
-        TSL.vec3(0.09, 0.13, 0.24),
-        TSL.smoothstep(0.1, 0.8, TSL.uv().y),
-      );
-    }
     const cyc = new THREE.Mesh(
       new THREE.CylinderGeometry(9, 9, 14, 64, 1, true),
       cycloramaMaterial,

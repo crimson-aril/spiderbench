@@ -17,7 +17,7 @@ import { createPlayer } from "./player/player.ts";
 import { createInput } from "./player/input.ts";
 import { createHud } from "./ui/hud.ts";
 import { createWarmup } from "./render/warmup.ts"; // (perf r3)
-import { getRenderPixelRatio } from "./render/quality.ts";
+import { getRenderPixelRatio, getResizedRenderPixelRatio } from "./render/quality.ts";
 import { REFL_LAYER } from "./world/waterLayers.ts";
 import { BIG_CASTER_LAYER } from "./render/cascadedShadows.ts";
 import { configureKTX2Loader } from "./render/ktx2.ts";
@@ -148,8 +148,17 @@ addEventListener("resize", () => {
     resizeTimeout = undefined;
     const width = innerWidth;
     const height = innerHeight;
+      // A hidden/minimized browser window can report a zero-sized viewport.
+      // WebGPU rejects zero-sized swapchain and pass textures, and that error
+      // can poison the next frame after the window becomes visible again.
+      if (renderer.backend?.isWebGPUBackend === true && (width <= 0 || height <= 0)) {
+        return;
+      }
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    if (renderer.backend?.isWebGPUBackend === true) {
+      renderer.setPixelRatio(getResizedRenderPixelRatio(renderer, { width, height }));
+    }
     renderer.setSize(width, height);
     pipeline.setSize(width, height);
   }, 120);

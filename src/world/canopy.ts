@@ -4,11 +4,11 @@
 // tone), shaded darker underneath / inside so clumps read as foliage masses from the air, casting shadows.
 // Not for Manhattan's own streets / park (trees.ts owns those, with real leaf cards and LODs).
 import { lazyShaderSections } from "../shaderSections.ts";
-import canopyShaderSource from "./shaders/glsl/canopy.glsl?raw";
+import canopyShaderSource from "./webgl2Shader/glsl/canopy.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import { getQuality } from "../render/quality.ts";
-import { createCanopyNodeMaterial } from "./canopyNodes.ts";
+import { createCanopyNodeMaterial } from "./webGPUShaderNodes/canopyNodes.ts";
 import * as THREE from "three";
 import { mulberry32 } from "./layout.ts";
 

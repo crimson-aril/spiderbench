@@ -14,11 +14,11 @@
 //   per-tile detail meshes: no extra draw calls; it fades with the detail tiles). Ad faces + main steel are one opaque
 //   mesh per 512 m cell (+ one blended ghost-sign mesh per cell), distance culled. Every solid registers collision.
 import { lazyShaderSections } from "../shaderSections.ts";
-import signageShaderSource from "./shaders/glsl/signage.glsl?raw";
+import signageShaderSource from "./webgl2Shader/glsl/signage.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createSignageNodeMaterial } from "./signageNodes.ts";
+import { createSignageNodeMaterial } from "./webGPUShaderNodes/signageNodes.ts";
 import { assetUrl } from "../assets.ts";
 import { getLoadedKTX2Texture } from "../render/ktx2.ts";
 import * as LAY from "./layout.ts";

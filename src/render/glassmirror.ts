@@ -1,5 +1,5 @@
 // @ts-nocheck
-import glassMirrorDeclarationsGlsl from "./shaders/glsl/glass-mirror-declarations.glsl?raw";
+import glassMirrorDeclarationsGlsl from "./webgl2Shader/glsl/glass-mirror-declarations.glsl?raw";
 // (render r-refl) Player reflection in facade glass (user: "fix player reflection not showing on
 // glass windows").
 // The facade glass (curtain walls, storefronts, sash windows) does its own procedural city reflection and opts out of

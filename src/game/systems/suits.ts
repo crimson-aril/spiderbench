@@ -17,7 +17,7 @@ import {
   setSuitNodeMask,
   setSuitNodeNormalScale,
   syncSuitNodeUniforms,
-} from "../../player/suitNodeMaterial.ts";
+} from "../../player/webGPUShaderNodes/suitNodeMaterial.ts";
 
 const suitsShader = lazyShaderSections(() => suitsShaderSource);
 

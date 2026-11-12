@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import surfaceShaderSource from "./shaders/glsl/surface.glsl?raw";
+import surfaceShaderSource from "./webgl2Shader/glsl/surface.glsl?raw";
 import { injectShader } from "./shaderInjection.ts";
 // // Global shader-chunk extension that encodes a per-pixel "screen-space reflection weight" into the ALPHA channel
 // of the HDR scene target (no extra G-buffer / MRT needed):

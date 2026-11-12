@@ -12,7 +12,7 @@
 //     buildings and beyond the modelled band all the way to the horizon.
 // terrain: farShoreHeight(x,z) -> FAR_Y | null (water). Piers are collision boxes (kind 'pier').
 import { lazyShaderSections } from "../shaderSections.ts";
-import farshoreShaderSource from "./shaders/glsl/farshore.glsl?raw";
+import farshoreShaderSource from "./webgl2Shader/glsl/farshore.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { nightK } from "../render/daynight.ts"; // (daynight)
 import * as THREE from "three";
@@ -27,7 +27,7 @@ import {
   createFarLandNodeMaterial,
   createFarMassNodeMaterial,
   createPalisadesCliffNodeMaterial,
-} from "./farshoreNodes.ts";
+} from "./webGPUShaderNodes/farshoreNodes.ts";
 
 const farshoreShader = lazyShaderSections(() => farshoreShaderSource);
 // (coast r1) near banks rebuilt by waterfront.ts

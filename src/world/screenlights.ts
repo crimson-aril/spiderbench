@@ -9,10 +9,10 @@
 //       brightness k). commit() merges small coplanar neighbours into one emitter (flux-preserving: radiance x area is
 //       summed, the colour is the flux-weighted mean) so dense screen walls stay inside the 18 lights / cell budget,
 //       and registers everything with cityLights (night only: the lights scale with nightK, nothing by day).
-//   scrUniforms() / SCR_GLSL_PARS / SCR_GAIN_GLSL: night brightness of screen emissives (see the bottom of the file).
+//   scrUniforms() / getScreenLightShaderSections(): night brightness of screen emissives (see the bottom of the file).
 //   Tunables live in SL (window.__screenLights for A/B: SL.gain / SL.sat then __screenLights.refresh()).
 import { lazyShaderSections } from "../shaderSections.ts";
-import screenlightsShaderSource from "./shaders/glsl/screenlights.glsl?raw";
+import screenlightsShaderSource from "./webgl2Shader/glsl/screenlights.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { cityLights } from "../render/citylights.ts";
@@ -454,7 +454,7 @@ export function regionAvg(
 // (night) displayed brightness of LED screens: by day the lighting.ts exposure compensation (screenK); at night
 // uScrBoost x brighter than that (the screens are the brightest emitters of the night city; lighting2 kept them at ~half
 // their day level). Materials opt out of the lighting.ts scan with userData.nightGain = 1 (emissiveIntensity stays at
-// its base) and multiply their emissive by SCR_GAIN_GLSL (no per-frame JS: screenK / nightK are uniform-shaped).
+// its base) and multiply their emissive by the GLSL gain expression (no per-frame JS: screenK / nightK are uniform-shaped).
 export const uScrBoost = { value: 2.0 },
   uScrDesat = { value: -0.18 }; // desat < 0: LED primaries a touch more saturated at night
 export const scrUniforms = () => ({
@@ -465,8 +465,6 @@ export const scrUniforms = () => ({
   uScrKnee,
   uScrTop,
 });
-export const SCR_GLSL_PARS = screenlightsShader.uniformDeclarations;
-export const SCR_GAIN_GLSL = screenlightsShader.gainExpression;
 // night highlight shoulder: the brightest channel (normalised to the panel's full drive = emissive x gain) rolls off from
 // SCR_KNEE toward SCR_TOP, the whole colour scaled together (hue / saturation kept): whites land just under clip after
 // the x4.5 night exposure + ACES, bloom carries the glow (critic r2: 'screen whites clip at 242+')
@@ -474,7 +472,16 @@ export const uScrKnee = { value: 0.28 },
   uScrTop = { value: 0.46 };
 if (typeof window !== "undefined")
   Object.assign(window.__screenLights, { uScrBoost, uScrKnee, uScrTop }); // (debug A/B)
-export const SCR_SHOULDER_GLSL = injectShader(screenlightsShader.highlightShoulder, SCR_GAIN_GLSL);
+export function getScreenLightShaderSections() {
+  const gainExpression = screenlightsShader.gainExpression;
+  return {
+    uniformDeclarations: screenlightsShader.uniformDeclarations,
+    gainExpression,
+    highlightShoulder: injectShader(screenlightsShader.highlightShoulder, gainExpression),
+    fragmentCommon: screenlightsShader.fragmentCommon,
+    fragmentLightsBegin: screenlightsShader.fragmentLightsBegin,
+  };
+}
 // wrap a lit emissive material (sign bands, neon, tickers): night gain applied to its final emissive (after any custom
 // emissive code of its own onBeforeCompile)
 export function screenNightMat(m, key) {
@@ -483,11 +490,12 @@ export function screenNightMat(m, key) {
   m.onBeforeCompile = function (sh, r) {
     if (obc && obc !== THREE.Material.prototype.onBeforeCompile)
       obc.call(this, sh, r);
+    const shader = getScreenLightShaderSections();
     Object.assign(sh.uniforms, scrUniforms());
     sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>",injectShader(screenlightsShader.fragmentCommon, SCR_GLSL_PARS))
+      .replace("#include <common>",injectShader(shader.fragmentCommon, shader.uniformDeclarations))
       .replace(
-        "#include <lights_fragment_begin>",injectShader(screenlightsShader.fragmentLightsBegin, SCR_GAIN_GLSL, SCR_SHOULDER_GLSL),
+        "#include <lights_fragment_begin>",injectShader(shader.fragmentLightsBegin, shader.gainExpression, shader.highlightShoulder),
       );
   };
   const ck = m.customProgramCacheKey;

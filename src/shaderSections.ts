@@ -40,9 +40,27 @@ export function parseShaderSections(source: string): Record<string, string> {
   return sections;
 }
 
+function resolveRawShaderSource(source: unknown): string {
+  if (typeof source === "string") {
+    return source;
+  }
+
+  if (source && typeof source === "object") {
+    const defaultSource = (source as { default?: unknown }).default;
+    if (typeof defaultSource === "string") {
+      return defaultSource;
+    }
+  }
+
+  const receivedType = source === null ? "null" : typeof source;
+  throw new TypeError(
+    `Shader source is missing; check that the GLSL ?raw import resolves to a string (received ${receivedType}).`,
+  );
+}
+
 /** Parse a shader only when its first section is requested. */
 export function lazyShaderSections<SectionName extends string = string>(
-  getSource: () => string,
+  getSource: () => unknown,
 ): Record<SectionName, string> {
   let sections: Record<string, string> | undefined;
 
@@ -52,7 +70,7 @@ export function lazyShaderSections<SectionName extends string = string>(
         return Reflect.get(target, property, receiver);
       }
 
-      sections ??= parseShaderSections(getSource());
+      sections ??= parseShaderSections(resolveRawShaderSource(getSource()));
       return sections[property];
     },
   });

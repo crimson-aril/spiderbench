@@ -2,7 +2,7 @@
 // Street furniture + rooftop clutter: geometry (procedural low-poly, vertex coloured, part ids) + placement + pools.
 // Local prop frame: +x along the curb, +z toward the roadway, y=0 at the sidewalk surface.
 import { lazyShaderSections } from "../shaderSections.ts";
-import propsShaderSource from "./shaders/glsl/props.glsl?raw";
+import propsShaderSource from "./webgl2Shader/glsl/props.glsl?raw";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";
@@ -42,8 +42,8 @@ import { getQuality } from "../render/quality.ts";
 import { screenLightSet } from "./screenlights.ts"; // (night r9) billboard / lightbox faces light the street
 import { createPartMaterial, MATERIAL_PART } from "./partMaterials.ts";
 import { usesNodeMaterialBackend, usesWebGPUBackend } from "../render/backendState.ts";
-import { createSteamNodeMaterial } from "./steamNodes.ts";
-import { createTimesSquareBladeFaceNodeMaterial } from "./timesSquareNodes.ts";
+import { createSteamNodeMaterial } from "./webGPUShaderNodes/steamNodes.ts";
+import { createTimesSquareBladeFaceNodeMaterial } from "./webGPUShaderNodes/timesSquareNodes.ts";
 import { COAST } from "./waterfront.ts"; // (coast r1) waterfront lamps / benches / trees
 import {
   GC_KEEP_OUT,

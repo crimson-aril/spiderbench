@@ -1,9 +1,9 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../../shaderSections.ts";
-import crowdShaderSource from "./shaders/glsl/crowd.glsl?raw";
+import crowdShaderSource from "./webgl2Shader/glsl/crowd.glsl?raw";
 import { injectShader } from "../../render/shaderInjection.ts";
-import crowdVertexShader from "./shaders/vertex/crowd-shadow.vert?raw";
-import crowdFragmentShader from "./shaders/fragment/crowd-shadow.frag?raw";
+import crowdVertexShader from "./webgl2Shader/vertex/crowd-shadow.vert?raw";
+import crowdFragmentShader from "./webgl2Shader/fragment/crowd-shadow.frag?raw";
 // Pedestrian crowd: Blender-modelled people (tools/blender/city_npc.py ->
 // public/city/npcs/people.{json,bin}) rendered as instanced meshes with GPU skinning from a baked animation
 // texture (18 bones, 14 clips, per-instance clip cross-fades + head look-at), 3 LODs, per-instance outfit colours.
@@ -18,7 +18,7 @@ import crowdFragmentShader from "./shaders/fragment/crowd-shadow.frag?raw";
 //    makes them cower/flee.
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../../render/backendState.ts";
-import { createDogNodeMaterial, createPeopleNodeMaterial } from "./peopleNodes.ts";
+import { createDogNodeMaterial, createPeopleNodeMaterial } from "./webGPUShaderNodes/peopleNodes.ts";
 import { getQuality } from "../../render/quality.ts";
 import { assetUrl } from "../../assets.ts";
 import { loadKTX2TextureAsync } from "../../render/ktx2.ts";

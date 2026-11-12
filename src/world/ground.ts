@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Streets (asphalt shader w/ lane grime), sidewalks + curbs, road markings, park ground, water.
 import { lazyShaderSections } from "../shaderSections.ts";
-import groundShaderSource from "./shaders/glsl/ground.glsl?raw";
+import groundShaderSource from "./webgl2Shader/glsl/ground.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { CURB_HEIGHT, WATER_Y } from "./layoutConstants.ts";
@@ -67,7 +67,7 @@ import {
   createAsphaltNodeMaterial,
   createGrassNodeMaterial,
   createSidewalkNodeMaterial,
-} from "./groundNodes.ts";
+} from "./webGPUShaderNodes/groundNodes.ts";
 
 const groundShader = lazyShaderSections(() => groundShaderSource);
 

@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import parkShaderSource from "./shaders/glsl/park.glsl?raw";
-import parkVertexShader from "./shaders/vertex/park-reflection.vert?raw";
-import parkFragmentShader from "./shaders/fragment/park-reflection.frag?raw";
+import parkShaderSource from "./webgl2Shader/glsl/park.glsl?raw";
+import parkVertexShader from "./webgl2Shader/vertex/park-reflection.vert?raw";
+import parkFragmentShader from "./webgl2Shader/fragment/park-reflection.frag?raw";
 // Central Park set pieces beyond the ground / trees:
 //   - PARK_SITES: lots inside the park kept clear of trees / paths (trees.ts, ground.ts via adjustParkPaths)
 //   - a Met-like museum on the Fifth-Avenue edge (~80th-84th): limestone Beaux-Arts front with a colonnaded central
@@ -28,7 +28,7 @@ import {
   createParkGlassRoofNodeMaterial,
   createParkHexPaverNodeMaterial,
   createParkWalkwayNodeMaterial,
-} from "./parkNodes.ts";
+} from "./webGPUShaderNodes/parkNodes.ts";
 
 export { PARK_ROCKS, PARK_SITES } from "./parkData.ts";
 

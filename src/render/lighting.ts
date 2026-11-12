@@ -19,7 +19,7 @@
 //   console: setTOD('night') (blended) | __ctx.lighting.setTimeOfDay('dusk') (instant)
 //   Night-city hooks read nightK (src/render/dayNight.ts), set per preset (night 1, dusk 0.7, overcast 0.3).
 import { lazyShaderSections } from "../shaderSections.ts";
-import lightingShaderSource from "./shaders/glsl/lighting.glsl?raw";
+import lightingShaderSource from "./webgl2Shader/glsl/lighting.glsl?raw";
 import * as THREE from "three";
 import { getQuality } from "./quality.ts";
 import { createSky } from "./sky.ts";
@@ -28,6 +28,7 @@ import { usesNodeMaterialBackend, usesWebGPUBackend } from "./backendState.ts";
 import { installSurfaceChunks, ambShared } from "./surface.ts";
 import { cityLights, installCityLightChunks } from "./citylights.ts"; // (night) real local lights
 import { sunTransmittance } from "./atmosphere.ts";
+import { setWebGPUEnvironmentTexture } from "./webGPUShaderNodes/environmentReflection.ts";
 
 // (daynight) ONE shared global for the night city (src/render/dayNight.ts): 0 = day .. 1 = full night. Also exposed as
 // window.__nightK and lighting.nightK.
@@ -369,7 +370,7 @@ function createNodeShadowRig(scene, quality) {
   // Keep WebGPU shadows readable in narrow streets and soften the hard edge
   // from the single directional key light.
   sun.shadow.intensity = 0.05;
-  sun.shadow.radius = 5.0;
+  sun.shadow.radius = quality.name === "low" ? 7.0 : quality.name === "high" ? 9.0 : 8.0;
   sun.shadow.autoUpdate = true;
   scene.add(sun, sun.target);
 
@@ -404,10 +405,11 @@ function createNodeShadowRig(scene, quality) {
 
 export function createLighting({ renderer, scene }) {
   const nodeBackend = usesNodeMaterialBackend();
-  // The procedural equirectangular DataTexture is converted to a PMREM by
-  // Three's WebGPU node-material path. In this scene that conversion makes
-  // otherwise valid lit materials render almost black, so keep the visible
-  // sky dome and direct/ambient lights but omit scene IBL on WebGPU.
+  // The WebGPU sky texture is sampled directly by TSL materials that need it
+  // (for example facade glass). Do not bind it as scene.environment: the
+  // captured WebGPU Standard-material probe goes black through Three's
+  // automatic equirectangular-to-PMREM path for this CPU-baked DataTexture.
+  // WebGL2 keeps its existing scene.environment/PMREM path below.
   const webGPUBackend = usesWebGPUBackend();
   const quality = getQuality(renderer);
   if (!nodeBackend) installSurfaceChunks(quality);
@@ -419,6 +421,10 @@ export function createLighting({ renderer, scene }) {
   renderer.shadowMap.autoUpdate = true;
 
   const sky = createSky(renderer, quality);
+  if (webGPUBackend) {
+    setWebGPUEnvironmentTexture(sky.environmentTexture);
+    scene.environment = null;
+  }
   if (nodeBackend) scene.add(sky.mesh);
   const cascadedShadows = nodeBackend
     ? createNodeShadowRig(scene, quality)
@@ -429,13 +435,15 @@ export function createLighting({ renderer, scene }) {
   const sun = cascadedShadows.sun;
 
   scene.background = null;
+  const nodeAmbientBase = quality.name === "low" ? 0.65 : quality.name === "high" ? 0.4 : 0.5;
+  const nodeHemisphereBase = quality.name === "low" ? 0.95 : quality.name === "high" ? 0.65 : 0.8;
   const nodeAmbient = nodeBackend
-    // TSL materials do not use the legacy surface shader's environment fill.
-    // Balance direct sun with ambient and hemisphere sky/ground fill instead.
-    ? new THREE.AmbientLight(0xb8c4d8, 5.0)
+    // Moderate WebGPU fill softens sun-facing contrast while the automatic
+    // scene-environment PMREM path is disabled for this CPU-baked sky.
+    ? new THREE.AmbientLight(0xb8c4d8, nodeAmbientBase)
     : null;
   const nodeHemisphere = nodeBackend
-    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, 8.0)
+    ? new THREE.HemisphereLight(0xcfe0ff, 0x7a6f60, nodeHemisphereBase)
     : null;
   if (nodeAmbient) scene.add(nodeAmbient);
   if (nodeHemisphere) scene.add(nodeHemisphere);
@@ -639,8 +647,8 @@ export function createLighting({ renderer, scene }) {
       city.ts * cl,
     ); // (night) LED-mix warm white (was sodium 0.5 / 0.17)
     scene.environmentIntensity = state.envIntensity;
-    if (nodeAmbient) nodeAmbient.intensity = lerp(3.5, 0.8, night);
-    if (nodeHemisphere) nodeHemisphere.intensity = lerp(5.0, 1.2, night);
+    if (nodeAmbient) nodeAmbient.intensity = lerp(nodeAmbientBase, 0.08, night);
+    if (nodeHemisphere) nodeHemisphere.intensity = lerp(nodeHemisphereBase, 0.12, night);
     applyNightMaterials();
   }
 
@@ -668,11 +676,7 @@ export function createLighting({ renderer, scene }) {
     // keep the color normalised-ish so other agents that read sun.intensity see something sane
     const m = Math.max(sun.color.r, sun.color.g, sun.color.b, 1e-6);
     sun.color.multiplyScalar(1 / m);
-    // The latest WebGPU lit probe reads about 5.6 on sunlit bands against 1.0
-    // in shade. Keep the fill and shadow settings, and trim only the daytime
-    // key to bring the sunlit reading closer to 4.4. WebGL and moonlight retain
-    // their existing level.
-    sun.intensity = m * (webGPUBackend && !key.moon ? 1.7 : 1);
+    sun.intensity = m;
     if (env) state.envDirty = true;
   }
 
@@ -897,8 +901,8 @@ export function createLighting({ renderer, scene }) {
       blend.on = false;
       blend.envTail = 1;
     }
-    // Legacy renderers refresh the environment a cube face at a time. WebGPU
-    // skips this map because its automatic PMREM conversion darkens the scene.
+    // Legacy renderers refresh the environment a cube face at a time; WebGPU
+    // uses the CPU-baked equirectangular texture refreshed below.
     if (!webGPUBackend && blend.envStep < 0) blend.envStep = 0;
   }
   function stepEnv() {
@@ -1013,25 +1017,20 @@ export function createLighting({ renderer, scene }) {
         applyNightMaterials();
       }
       if (state.envDirty) {
-        // WebGPU feeds this CPU-baked equirectangular sky directly to the
-        // TSL diffuse-fill fallback. Do not assign it as scene.environment:
-        // Three's automatic PMREM conversion is the part that darkens the
-        // WebGPU materials. The legacy WebGL2 renderer still uses its PMREM.
+        // WebGL2 receives the baked sky as its scene environment. WebGPU
+        // keeps the same texture available for direct TSL reflection sampling,
+        // while diffuse fill comes from its lights and TSL albedo fallback.
         state.envTexture = sky.renderEnv();
-        if (!webGPUBackend) {
-          scene.environment = state.envTexture;
-          if (state.envTexture)
-            console.log("PMREM texture diagnostics:", {
-              mapping: state.envTexture.mapping,
-              width: state.envTexture.image?.width,
-              height: state.envTexture.image?.height,
-              isTexture: state.envTexture.isTexture,
-              isRenderTargetTexture: state.envTexture.isRenderTargetTexture,
-              image: state.envTexture.image,
-            });
-        } else {
-          scene.environment = null;
-        }
+        if (!webGPUBackend) scene.environment = state.envTexture;
+        if (!webGPUBackend && state.envTexture)
+          console.log("PMREM texture diagnostics:", {
+            mapping: state.envTexture.mapping,
+            width: state.envTexture.image?.width,
+            height: state.envTexture.image?.height,
+            isTexture: state.envTexture.isTexture,
+            isRenderTargetTexture: state.envTexture.isRenderTargetTexture,
+            image: state.envTexture.image,
+          });
 
         scene.environmentIntensity = state.envIntensity;
         state.envDirty = false;

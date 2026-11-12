@@ -1,10 +1,10 @@
 // @ts-nocheck
-import webVertexShader from "./shaders/vertex/web-vert.vert?raw";
-import webFragmentShader from "./shaders/fragment/web-frag.frag?raw";
+import webVertexShader from "./webgl2Shader/vertex/web-vert.vert?raw";
+import webFragmentShader from "./webgl2Shader/fragment/web-frag.frag?raw";
 // Web strand rendering (screen-space expanded AA ribbons) + thwip impact splats.
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createWebStrandNodeMaterial } from "./webStrandsNodes.ts";
+import { createWebStrandNodeMaterial } from "./webGPUShaderNodes/webStrandsNodes.ts";
 
 // Two-handed swing grip (animator -> web): when the free hand joins the line below the web hand, the strand is extended
 // past the web hand down to the second hand's grip (world-space offset from the web palm, weighted) so both fists sit on it.

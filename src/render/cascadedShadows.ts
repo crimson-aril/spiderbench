@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import cascadedShadowShaderSource from "./shaders/glsl/cascaded-shadows.glsl?raw";
+import cascadedShadowShaderSource from "./webgl2Shader/glsl/cascaded-shadows.glsl?raw";
 import { injectShader } from "./shaderInjection.ts";
 // Cascaded shadow maps for the sun, implemented with N DirectionalLights (one shadow map per cascade) and a
 // GLOBAL override of three's `lights_fragment_begin` / `shadowmap_pars_fragment` chunks, so EVERY built-in lit

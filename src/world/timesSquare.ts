@@ -9,7 +9,7 @@
 //       steps, the One-Times-Square-like tower standing on the closed avenue segment (layout.CLOSED_AV x=0, -80..0),
 //       planters with hedges and bollards. Every solid registers its collision (gen.solids) in the same call.
 import { lazyShaderSections } from "../shaderSections.ts";
-import timesSquareShaderSource from "./shaders/glsl/times-square.glsl?raw";
+import timesSquareShaderSource from "./webgl2Shader/glsl/times-square.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import {
@@ -20,7 +20,7 @@ import {
   createTimesSquareRoadWearNodeMaterial,
   createTimesSquareScreenNodeMaterial,
   createTimesSquareShopNodeMaterial,
-} from "./timesSquareNodes.ts";
+} from "./webGPUShaderNodes/timesSquareNodes.ts";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";
@@ -47,9 +47,7 @@ import { cityLights } from "../render/citylights.ts"; // (night) screens are rea
 import {
   screenLightSet,
   scrUniforms,
-  SCR_GLSL_PARS,
-  SCR_GAIN_GLSL,
-  SCR_SHOULDER_GLSL,
+  getScreenLightShaderSections,
   screenNightMat,
 } from "./screenlights.ts";
 
@@ -5239,15 +5237,16 @@ export function buildTimesSquare({ scene, gen }) {
   sm.defines = { ...sm.defines, CITYL_NOSPEC: "" }; // (night r11) no city-light specular on the LED faces (cityLights.ts)
   // LED panel micro-structure: faint pixel grid that fades out with distance (no moire far away)
   if (!nodeBackend) sm.onBeforeCompile = (sh) => {
+    const screenLightShader = getScreenLightShaderSections();
     Object.assign(sh.uniforms, scrUniforms());
     sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>", injectShader(timesSquareShaderSections.fragmentCommon, SCR_GLSL_PARS))
+      .replace("#include <common>", injectShader(timesSquareShaderSections.fragmentCommon, screenLightShader.uniformDeclarations))
       .replace(
         "#include <emissivemap_fragment>",
         injectShader(
           timesSquareShaderSections.fragmentEmissive,
-          SCR_GAIN_GLSL,
-          SCR_SHOULDER_GLSL.replace(
+          screenLightShader.gainExpression,
+          screenLightShader.highlightShoulder.replace(
             "+ 1e-4;",
             "* clamp(vColor.r / 0.7, 0.3, 1.0) + 1e-4;",
           ),

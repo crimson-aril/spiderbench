@@ -1,10 +1,10 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import facadeShaderSource from "./shaders/glsl/facade.glsl?raw";
+import facadeShaderSource from "./webgl2Shader/glsl/facade.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
-import facadeVertexDeclarations from "./shaders/vertex/facade-vert_decl.vert?raw";
-import facadeVertexMain from "./shaders/vertex/facade-vert_main.vert?raw";
-import facadeFragmentShaderDeclarations from "./shaders/fragment/facade-frag_decl.frag?raw";
+import facadeVertexDeclarations from "./webgl2Shader/vertex/facade-vert_decl.vert?raw";
+import facadeVertexMain from "./webgl2Shader/vertex/facade-vert_main.vert?raw";
+import facadeFragmentShaderDeclarations from "./webgl2Shader/fragment/facade-frag_decl.frag?raw";
 // Facade material + merged-geometry builder for all building masses.
 // One MeshStandardMaterial (extended via onBeforeCompile) draws every wall / roof / trim of a tile in ONE draw call.
 // Per-vertex attributes carry the facade parameters; the fragment shader generates windows procedurally with
@@ -24,7 +24,7 @@ import { usesNodeMaterialBackend } from "../render/backendState.ts";
 import {
   createFacadeNodeMaterial,
   deriveFacadeNodeMaterial,
-} from "./facadeNodes.ts";
+} from "./webGPUShaderNodes/facadeNodes.ts";
 
 const facadeShader = lazyShaderSections(() => facadeShaderSource);
 // (night) shop fronts light the sidewalk

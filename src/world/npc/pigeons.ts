@@ -3,10 +3,10 @@
 // Spider-Man comes close (walks up, lands nearby, swings low past) or world.alarm() fires, the flock bursts into the
 // air, circles, and resettles once he has gone. One instanced mesh; wing flap / head peck in the vertex shader.
 import { lazyShaderSections } from "../../shaderSections.ts";
-import pigeonsShaderSource from "./shaders/glsl/pigeons.glsl?raw";
+import pigeonsShaderSource from "./webgl2Shader/glsl/pigeons.glsl?raw";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../../render/backendState.ts";
-import { createPigeonNodeMaterial } from "./pigeonsNodes.ts";
+import { createPigeonNodeMaterial } from "./webGPUShaderNodes/pigeonsNodes.ts";
 import { G, mulberry32, inPark, shoreX } from "../layout.ts";
 import { MeshBuilder } from "../meshBuilder.ts";
 

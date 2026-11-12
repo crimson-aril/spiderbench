@@ -34,7 +34,7 @@
 //  * Don't set scene.fog / scene.background / scene.environment / tone mapping: the render pipeline owns them.
 //  * Shadows: set castShadow/receiveShadow on meshes; cascades are handled globally (no per-material setup).
 import { lazyShaderSections } from "../shaderSections.ts";
-import materialsShaderSource from "./shaders/glsl/materials.glsl?raw";
+import materialsShaderSource from "./webgl2Shader/glsl/materials.glsl?raw";
 import * as THREE from "three";
 
 const materialsShader = lazyShaderSections(() => materialsShaderSource);

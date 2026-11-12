@@ -3,7 +3,7 @@
 // cheap lane-following traffic with IDM car-following and traffic-light stops. All instanced (1 draw per model).
 // Model frame: +x forward, y up, wheels on y=0.
 import { lazyShaderSections } from "../shaderSections.ts";
-import vehiclesShaderSource from "./shaders/glsl/vehicles.glsl?raw";
+import vehiclesShaderSource from "./webgl2Shader/glsl/vehicles.glsl?raw";
 import * as THREE from "three";
 import { assetUrl } from "../assets.ts";
 import { loadKTX2TextureAsync } from "../render/ktx2.ts";

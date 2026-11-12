@@ -1,17 +1,21 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import skyShaderSource from "./shaders/glsl/sky.glsl?raw";
-import skyLutGenerationFragmentShader from "./shaders/fragment/sky-lut.frag?raw";
-import skyNoiseGenerationFragmentShader from "./shaders/fragment/sky-noise.frag?raw";
-import skyPassFragmentShader from "./shaders/fragment/sky-pass.frag?raw";
-import environmentSkyVertexShader from "./shaders/vertex/sky-environment.vert?raw";
-import environmentSkyFragmentShader from "./shaders/fragment/sky-environment.frag?raw";
+import skyShaderSource from "./webgl2Shader/glsl/sky.glsl?raw";
+import skyLutGenerationFragmentShader from "./webgl2Shader/fragment/sky-lut.frag?raw";
+import skyNoiseGenerationFragmentShader from "./webgl2Shader/fragment/sky-noise.frag?raw";
+import skyPassFragmentShader from "./webgl2Shader/fragment/sky-pass.frag?raw";
+import environmentSkyVertexShader from "./webgl2Shader/vertex/sky-environment.vert?raw";
+import environmentSkyFragmentShader from "./webgl2Shader/fragment/sky-environment.frag?raw";
 import { injectShader } from "./shaderInjection.ts";
 // // Physically based sky: single-scattering atmosphere (Rayleigh + Mie + ozone, approx multiple scattering)
 // baked into a small sky-view LUT, raymarched cumulus cloud layer (Perlin-Worley 3D noise), procedural distant
 // skyline, PMREM environment generation for IBL.
 import * as THREE from "three";
-import { FullscreenPass, createRenderTarget, DEPTH_RECONSTRUCTION_GLSL } from "./fullscreenPass.ts";
+import {
+  FullscreenPass,
+  createRenderTarget,
+  getDepthReconstructionGLSL,
+} from "./fullscreenPass.ts";
 import { GLSL_ATMOS, sunTransmittance } from "./atmosphere.ts";
 import * as WEBGPU from "three/webgpu";
 import * as TSL from "three/tsl";
@@ -31,19 +35,26 @@ const LUT_FRAG = injectShader(skyLutGenerationFragmentShader, GLSL_ATMOS);
 // GLSL: tileable Perlin-Worley 3D noise generation (R = perlin-worley, GBA = worley fbm at increasing freqs)
 const NOISE_FRAG = skyNoiseGenerationFragmentShader;
 
-// ---------------------------------------------------------------------------------------------------------
-// GLSL: shared sky evaluation (LUT lookup, clouds, skyline). Requires uniforms declared in SKY_UNIFORMS.
-export const GLSL_SKY_COMMON = injectShader(
-  skyShader.commonAtmosphere,
-  GLSL_ATMOS,
-  LUT_W,
-  LUT_W,
-);
-
-const GLSL_CLOUDS = skyShader.clouds;
+// Resolve these snippets on demand so WebGPU module initialization never reads
+// a raw GLSL binding while Rolldown's cyclic chunks are still being evaluated.
+export function getSkyShaderSections() {
+  return {
+    commonAtmosphere: injectShader(
+      skyShader.commonAtmosphere,
+      GLSL_ATMOS,
+      LUT_W,
+      LUT_W,
+    ),
+    clouds: skyShader.clouds,
+  };
+}
 
 export function createSky(renderer, quality) {
   if (usesNodeMaterialBackend()) return createNodeSky(quality);
+
+  const { commonAtmosphere: GLSL_SKY_COMMON, clouds: GLSL_CLOUDS } =
+    getSkyShaderSections();
+  const depthReconstructionGLSL = getDepthReconstructionGLSL();
 
   // LUT target
   const lut = createRenderTarget(LUT_W, LUT_H, { type: THREE.HalfFloatType });
@@ -218,7 +229,7 @@ export function createSky(renderer, quality) {
     },
     fragmentShader: injectShader(
       skyPassFragmentShader,
-      DEPTH_RECONSTRUCTION_GLSL,
+      depthReconstructionGLSL,
       GLSL_SKY_COMMON,
       GLSL_CLOUDS,
     ),
@@ -368,6 +379,11 @@ function createNodeSky(quality = {}) {
     overcast: 0,
     sunGlow: [0, 0, 0, 0],
   };
+  // The node sky palette is authored in display-like 0..1 values, while the
+  // rest of the WebGPU scene uses HDR radiance. Scale sky fill into that range;
+  // direct sun terms below already use the HDR sunColor and stay unscaled.
+  const skyRadianceFactor = 0.3;
+  const skyRadianceNode = TSL.uniform(params.skyScale * skyRadianceFactor);
   const sunDir = new THREE.Vector3();
   const sunColor = new THREE.Color();
   const skyTint = new THREE.Vector3(1, 1, 1);
@@ -442,6 +458,7 @@ function createNodeSky(quality = {}) {
   material.depthTest = false;
   material.toneMapped = false;
   material.fog = false;
+  material.allowOverride = false;   // keep the real sky in tsltest=lit/solid
   const direction = TSL.normalize(TSL.positionWorld.sub(TSL.cameraPosition));
   const height = direction.y;
   const skyGradient = TSL.smoothstep(-0.22, 0.52, height);
@@ -472,11 +489,12 @@ function createNodeSky(quality = {}) {
     TSL.vec3(0.76, 0.79, 0.82),
     TSL.smoothstep(-0.04, 0.28, sunDirectionNode.y),
   ).mul(TSL.float(1).sub(nightNode.mul(0.58)));
-  const cloudLit = cloudBase.add(
+  const cloudLit = cloudBase.mul(skyRadianceNode).add(
     sunColorNode.mul(TSL.pow(sunCos, 3).mul(cloudSunNode).mul(0.025)),
   );
   const overcastSky = TSL.vec3(0.42, 0.45, 0.48).mul(TSL.float(0.35).add(skyGradient.mul(0.25)));
-  const atmosphere = TSL.mix(baseSky.add(horizonGlow), overcastSky, overcastNode.mul(0.8));
+  const atmosphere = TSL.mix(baseSky.add(horizonGlow), overcastSky, overcastNode.mul(0.8))
+    .mul(skyRadianceNode);
   const starCell = TSL.floor(direction.mul(380));
   const starHash = TSL.fract(TSL.sin(TSL.dot(starCell, TSL.vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
   const stars = TSL.step(0.9985, starHash).mul(TSL.smoothstep(0.02, 0.35, height)).mul(starsNode);
@@ -530,6 +548,7 @@ function createNodeSky(quality = {}) {
     nightNode.value = params.night;
     overcastNode.value = params.overcast;
     starsNode.value = params.stars;
+    skyRadianceNode.value = params.skyScale * skyRadianceFactor;
     envDirty = true;
   }
 
@@ -554,6 +573,7 @@ function createNodeSky(quality = {}) {
     const [width, height] = envSize;
     const tint = params.skyTint;
     const glow = params.skyGlow;
+    const skyRadianceScale = params.skyScale * skyRadianceFactor;
     const day = smoothstep(-0.08, 0.16, sunDir.y);
     const c = new THREE.Vector3();
     const cloudColor = new THREE.Vector3();
@@ -570,6 +590,7 @@ function createNodeSky(quality = {}) {
         const glowScale = Math.pow(Math.max(0, 1 - Math.abs(se)), 3);
         c.copy(baseH).lerp(baseZ, skyMix);
         c.set(c.x * tint[0] + glow[0] * Math.exp(-Math.max(se, 0) * 7), c.y * tint[1] + glow[1] * Math.exp(-Math.max(se, 0) * 7), c.z * tint[2] + glow[2] * Math.exp(-Math.max(se, 0) * 7));
+        c.multiplyScalar(skyRadianceScale);
         const cloudUvX = dx / Math.max(se, 0.07) * params.cloudScale * 5.5 + 0.31;
         const cloudUvY = dz / Math.max(se, 0.07) * params.cloudScale * 5.5 + 0.73;
         const cloudField = quality?.name === "low"
@@ -583,11 +604,11 @@ function createNodeSky(quality = {}) {
           * params.cloudDensity * smoothstep(-0.08, 0.16, se);
         const cloudLight = THREE.MathUtils.lerp(0.17, 0.76, smoothstep(-0.04, 0.28, sunDir.y))
           * (1 - params.night * 0.58);
-        const cloudR = cloudLight * 0.99 + sunColor.r * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
-        const cloudG = cloudLight * 1.02 + sunColor.g * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
-        const cloudB = cloudLight * 1.06 + sunColor.b * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudR = cloudLight * 0.99 * skyRadianceScale + sunColor.r * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudG = cloudLight * 1.02 * skyRadianceScale + sunColor.g * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudB = cloudLight * 1.06 * skyRadianceScale + sunColor.b * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
         const overcastK = params.overcast * 0.8;
-        const grey = 0.42 * (0.35 + skyMix * 0.25);
+        const grey = 0.42 * (0.35 + skyMix * 0.25) * skyRadianceScale;
         c.lerp(cloudColor.set(grey, grey * 1.07, grey * 1.14), overcastK);
         c.lerp(cloudColor.set(cloudR, cloudG, cloudB), cloud);
         const sun = Math.pow(dotSun, 90) + Math.pow(dotSun, 36) * 0.32;
@@ -612,6 +633,7 @@ function createNodeSky(quality = {}) {
     params,
     sunDir,
     sunColor,
+    environmentTexture: envTexture,
     skyUniforms,
     mesh,
     update,

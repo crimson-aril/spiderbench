@@ -4,7 +4,7 @@
 // (mirrored camera render, only while the camera is near) blended into the IBL specular term, so Spidey and the
 // park/avenue reflect in it; where the reflection render is empty (sky) the regular environment map is used.
 import { lazyShaderSections } from "../shaderSections.ts";
-import heroShaderSource from "./shaders/glsl/hero.glsl?raw";
+import heroShaderSource from "./webgl2Shader/glsl/hero.glsl?raw";
 import * as THREE from "three";
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";

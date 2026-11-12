@@ -11,14 +11,14 @@
 // Plus: wet bands (dark, algae-stained tidal strip) along every bulkhead / seawall / pier edge, and a horizon skirt
 // just inside the far plane.
 import { lazyShaderSections } from "../shaderSections.ts";
-import waterShaderSource from "./shaders/glsl/water.glsl?raw";
+import waterShaderSource from "./webgl2Shader/glsl/water.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { G, distToShore, LAND_POLY } from "./layout.ts";
 import { FAR_LANDS } from "./farshore.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createRiverNodeMaterial } from "./waterNodes.ts";
+import { createRiverNodeMaterial } from "./webGPUShaderNodes/waterNodes.ts";
 
 export { REFL_LAYER };
 

@@ -5,11 +5,11 @@
 // Z-fighting rules followed throughout: no two coplanar faces with the same facing ever overlap. Trims that touch a
 // wall omit their wall-side face; corner pieces are owned by the z-facing run; party-side trims never overhang.
 import { lazyShaderSections } from "../shaderSections.ts";
-import buildingsShaderSource from "./shaders/glsl/buildings.glsl?raw";
+import buildingsShaderSource from "./webgl2Shader/glsl/buildings.glsl?raw";
 import { injectShader } from "../render/shaderInjection.ts";
 import * as THREE from "three";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createBuildingDetailNodeMaterial } from "./buildingDetailNodes.ts";
+import { createBuildingDetailNodeMaterial } from "./webGPUShaderNodes/buildingDetailNodes.ts";
 import {
   G,
   district,

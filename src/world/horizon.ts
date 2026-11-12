@@ -7,7 +7,7 @@
 // average with distance (no shimmer). Read through the aerial-perspective fog they give the horizon a real, uneven
 // city silhouette instead of a flat band. No shadows, no collision (unreachable); ~1 draw call.
 import { lazyShaderSections } from "../shaderSections.ts";
-import horizonShaderSource from "./shaders/glsl/horizon.glsl?raw";
+import horizonShaderSource from "./webgl2Shader/glsl/horizon.glsl?raw";
 import * as THREE from "three";
 import { mulberry32, hash2, onLand, G } from "./layout.ts";
 import { farShoreHeight } from "./farshore.ts";
@@ -15,7 +15,7 @@ import { farShoreHeight } from "./farshore.ts";
 import { REFL_LAYER } from "./waterLayers.ts";
 import { nightK } from "../render/daynight.ts";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createHinterlandNodeMaterial } from "./horizonNodes.ts";
+import { createHinterlandNodeMaterial } from "./webGPUShaderNodes/horizonNodes.ts";
 
 const horizonShader = lazyShaderSections(() => horizonShaderSource);
 // (night)

@@ -4,9 +4,9 @@ import * as THREE from "three";
 import { nightK } from "../render/daynight.ts";
 import { injectShader } from "../render/shaderInjection.ts";
 import { lazyShaderSections } from "../shaderSections.ts";
-import partMaterialShaderSource from "./shaders/glsl/part-materials.glsl?raw";
+import partMaterialShaderSource from "./webgl2Shader/glsl/part-materials.glsl?raw";
 import { usesNodeMaterialBackend } from "../render/backendState.ts";
-import { createPartNodeMaterial } from "./partMaterialNodes.ts";
+import { createPartNodeMaterial } from "./webGPUShaderNodes/partMaterialNodes.ts";
 
 type PartMaterialOptions = {
   name?: string;

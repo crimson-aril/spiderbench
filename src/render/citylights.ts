@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { lazyShaderSections } from "../shaderSections.ts";
-import citylightsShaderSource from "./shaders/glsl/citylights.glsl?raw";
+import citylightsShaderSource from "./webgl2Shader/glsl/citylights.glsl?raw";
 import { injectShader } from "./shaderInjection.ts";
 // CITY LIGHTS: real local lighting for the night city (street lamps, shop fronts, car
 // lights, LED screens / billboards, floodlights). Every lit built-in material (Standard / Physical / Lambert / Phong /
@@ -27,7 +27,7 @@ import { injectShader } from "./shaderInjection.ts";
 //   cityLights.addProvider(fn(emit, camera))  dynamic lights (cars ...): called once per frame, emit(record) with the
 //      same fields as add() (plain objects; reuse them, they are copied)
 //   cityLights.gain  global multiplier; cityLights.enabled; cityLights.stats
-//   cityLightsGLSL: pars + eval function for custom ShaderMaterials (define USE_CITYL, add uniform cityL:
+//   getCityLightsGLSL(): pars + eval function for custom ShaderMaterials (define USE_CITYL, add uniform cityL:
 //      { value: cityLightsShared }), then `cityLightIrradiance(worldPos, worldNormal)` returns the diffuse irradiance
 // ?nocl disables the whole system (A/B).
 import * as THREE from "three";
@@ -99,32 +99,31 @@ export const cityLightsShared = {
 };
 
 // ------------------------------------------------------------------------------------------------ GLSL
-const GLSL_PARS = injectShader(
-  citylightsShader.lightDeclarations,
-  CL_SH_N,
-  CL_UN * 4 + 1,
-  CL_SH_N,
-  CL_SH_N,
-  CL_SH_TILE * 2,
-  CL_UN * 4,
-  CL_N,
-  CL_TPC,
-  CL_LAYER_Y,
-  CL_N,
-  CL_N,
-  CL_SLOTS,
-);
+function getCityLightShaderSources() {
+  const declarations = injectShader(
+    citylightsShader.lightDeclarations,
+    CL_SH_N,
+    CL_UN * 4 + 1,
+    CL_SH_N,
+    CL_SH_N,
+    CL_SH_TILE * 2,
+    CL_UN * 4,
+    CL_N,
+    CL_TPC,
+    CL_LAYER_Y,
+    CL_N,
+    CL_N,
+    CL_SLOTS,
+  );
+  const apply = injectShader(citylightsShader.applyLights, CL_SLOTS, CL_SLOTS);
+  return { declarations, apply };
+}
+
+export const getCityLightsGLSL = () => getCityLightShaderSources().declarations;
 // Fast path (plain Standard / Physical without clearcoat / sheen / iridescence: city surfaces, peds, trees): the
 // diffuse of all lights is summed and shaded once; GGX specular is evaluated per light only on surfaces smooth enough
 // to show it (roughness < 0.75: wet asphalt, glass, polished stone). Clearcoat / sheen materials (car paint, the suit)
 // and Lambert / Phong go through the full RE_Direct per light.
-const GLSL_APPLY = injectShader(
-  citylightsShader.applyLights,
-  CL_SLOTS,
-  CL_SLOTS,
-);
-export const cityLightsGLSL = GLSL_PARS;
-
 // (r11) texture-unit fallback: with 16 fragment units (Apple Metal, ANGLE D3D11) the 3 city-light samplers pushed the
 // texture-heavy materials (suit, facades) over the limit, the programs failed to link and those meshes vanished, by day
 // too. After new programs appear, every failed one is looked up and its materials recompiled without the shadow sampler,
@@ -197,6 +196,8 @@ export function installCityLightChunks(renderer = null, scene = null) {
     /* non-browser */
   } // A/B: ?nocl all, ?noclsh shadows, ?noclvol lit haze
   const SC = THREE.ShaderChunk;
+  const { declarations: GLSL_PARS, apply: GLSL_APPLY } =
+    getCityLightShaderSources();
   if (!SC.lights_pars_begin.includes("CITYL_PARS"))
     SC.lights_pars_begin =
       SC.lights_pars_begin +
