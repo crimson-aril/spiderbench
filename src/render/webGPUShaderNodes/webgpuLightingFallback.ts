@@ -33,6 +33,22 @@ export function applyWebGPULightingFallback(
   const ambientFillNode = typeof ambientFill === "number" ? float(ambientFill) : ambientFill;
   const verticalFillNode = typeof verticalFill === "number" ? float(verticalFill) : verticalFill;
   const patched = { nodePbr: 0, classicPbr: 0 };
+  const facadeMaterials = new Map<object, {
+    name: string;
+    uuid: string | null;
+    references: number;
+    isNodeMaterial: boolean;
+    isNodeStandardPhysical: boolean;
+    fallbackEligibleNodePbr: boolean;
+    isClassicPbr: boolean;
+    lights: boolean | null;
+    hasEmissiveNodeBeforePatch: boolean;
+    hasEmissiveNodeAfterPatch: boolean;
+    alreadyPatched: boolean;
+    patchedThisPass: boolean;
+  }>();
+  let facadeObjectCount = 0;
+  let facadeMaterialReferenceCount = 0;
 
   scene?.traverse?.((object: any) => {
     const materials = Array.isArray(object.material)
@@ -40,12 +56,38 @@ export function applyWebGPULightingFallback(
       : object.material
         ? [object.material]
         : [];
+    const objectFacadeMaterials = materials.filter((material: any) => material?.userData?.nodeFacade);
+    if (object.isMesh && objectFacadeMaterials.length > 0) facadeObjectCount++;
 
     for (const material of materials) {
-      const isNodePbr = material?.isNodeMaterial && material.lights === true && (
+      const isNodeStandardPhysical = material?.isNodeMaterial && (
         material.isMeshStandardNodeMaterial || material.isMeshPhysicalNodeMaterial
       );
+      const isNodePbr = isNodeStandardPhysical && material.lights === true;
       const isClassicPbr = material?.isMeshStandardMaterial || material?.isMeshPhysicalMaterial;
+      const isFacade = material?.userData?.nodeFacade === true;
+      if (isFacade) {
+        facadeMaterialReferenceCount++;
+        const existing = facadeMaterials.get(material);
+        if (existing) {
+          existing.references++;
+        } else {
+          facadeMaterials.set(material, {
+            name: material.name || material.type || "unnamed",
+            uuid: material.uuid ?? null,
+            references: 1,
+            isNodeMaterial: !!material.isNodeMaterial,
+            isNodeStandardPhysical: !!isNodeStandardPhysical,
+            fallbackEligibleNodePbr: !!isNodePbr,
+            isClassicPbr: !!isClassicPbr,
+            lights: typeof material.lights === "boolean" ? material.lights : null,
+            hasEmissiveNodeBeforePatch: material.emissiveNode != null,
+            hasEmissiveNodeAfterPatch: material.emissiveNode != null,
+            alreadyPatched: patchedMaterials.has(material),
+            patchedThisPass: false,
+          });
+        }
+      }
       if ((!isNodePbr && !isClassicPbr) || patchedMaterials.has(material)) continue;
 
       // Read the material's authored base color node, or the TSL materialColor
@@ -74,10 +116,29 @@ export function applyWebGPULightingFallback(
       material.emissiveNode = vec3(authoredEmission).add(fill);
       material.needsUpdate = true;
       patchedMaterials.add(material);
+      if (isFacade) {
+        const diagnostic = facadeMaterials.get(material);
+        if (diagnostic) {
+          diagnostic.patchedThisPass = true;
+          diagnostic.hasEmissiveNodeAfterPatch = material.emissiveNode != null;
+        }
+      }
       if (isNodePbr) patched.nodePbr++;
       else patched.classicPbr++;
     }
   });
+
+  if (facadeMaterialReferenceCount > 0) {
+    const uniqueFacadeMaterials = [...facadeMaterials.values()];
+    console.info("[lighting-fallback] facade material pass", {
+      facadeMeshCount: facadeObjectCount,
+      facadeMaterialReferenceCount,
+      uniqueFacadeMaterialCount: uniqueFacadeMaterials.length,
+      patchedFacadeMaterialCount: uniqueFacadeMaterials.filter((material) => material.patchedThisPass).length,
+      alreadyPatchedFacadeMaterialCount: uniqueFacadeMaterials.filter((material) => material.alreadyPatched).length,
+      facadeMaterials: uniqueFacadeMaterials,
+    });
+  }
 
   return patched;
 }
