@@ -130,14 +130,17 @@ export function applyWebGPULightingFallback(
 
   if (facadeMaterialReferenceCount > 0) {
     const uniqueFacadeMaterials = [...facadeMaterials.values()];
-    console.info("[lighting-fallback] facade material pass", {
+    const facadePassSummary = {
       facadeMeshCount: facadeObjectCount,
       facadeMaterialReferenceCount,
       uniqueFacadeMaterialCount: uniqueFacadeMaterials.length,
       patchedFacadeMaterialCount: uniqueFacadeMaterials.filter((material) => material.patchedThisPass).length,
       alreadyPatchedFacadeMaterialCount: uniqueFacadeMaterials.filter((material) => material.alreadyPatched).length,
       facadeMaterials: uniqueFacadeMaterials,
-    });
+    };
+    // Emit serialized text so browser-console exports retain the per-material
+    // details instead of collapsing the object to `{…}`.
+    console.info(`[lighting-fallback] facade material pass ${JSON.stringify(facadePassSummary)}`);
   }
 
   return patched;
