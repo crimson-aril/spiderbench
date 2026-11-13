@@ -126,10 +126,12 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   const grade = {
     autoExposure: true,
     aeKey: -2.05,
-    aeStrength: 0.42,
-    aeRange: 1.25,
-    aeSpeedUp: 2.5,
-    aeSpeedDown: 1.4,
+    // Keep camera-driven exposure changes subtle in the WebGPU path.
+    aeStrength: 0.24,
+    aeRange: 0.45,
+    aeDeadband: 0.08,
+    aeSpeedUp: 0.45,
+    aeSpeedDown: 0.35,
     exposure: 0.8,
     toe: 0.34,
     saturation: 1.14,
@@ -384,8 +386,8 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   };
   const resolution = new Vector2(1, 1);
   const exposureAdaptation = {
-    ev: 0.5,
-    targetEv: 0.5,
+    ev: 0,
+    targetEv: 0,
     sampleElapsed: 0.25,
     pending: false,
     failed: false,
@@ -476,6 +478,9 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   let godraysNode: any = null;
   let shaftSunColor: any = null;
   let shaftSunGain: any = null;
+  // GodraysNode returns a bounded density mask, not HDR in-scatter radiance.
+  // Map the scene's ~16.65 daylight sun intensity to unit gain before adding it.
+  const shaftSunGainScale = 1 / 16.65;
 
   // The WebGL2 path currently keeps its experimental SSGI pass disabled. Match
   // that behavior here instead of adding raw, noisy GI on top of the lit pass.
@@ -539,7 +544,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
     godraysNode.distanceAttenuation.value = 1.5;
     godraysNode.resolutionScale = 0.5;
     shaftSunColor = uniform(lighting.sun.color.clone());
-    shaftSunGain = uniform(lighting.sun.intensity);
+    shaftSunGain = uniform(Math.max(0, Math.min(1, lighting.sun.intensity * shaftSunGainScale)));
     outputNode = vec4(
       outputNode.rgb.add(godraysNode.rgb.mul(shaftSunColor).mul(shaftSunGain)),
       outputNode.a,
@@ -916,12 +921,15 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
           console.warn(`[tsl-debug] scene pass has visible luminance before post-processing; inspect grading/display output if the final image looks dark\n${JSON.stringify(sample, null, 2)}`);
         }
       }
-      exposureAdaptation.targetEv = nextTargetEv;
+      if (Math.abs(nextTargetEv - exposureAdaptation.targetEv) >= grade.aeDeadband) {
+        exposureAdaptation.targetEv = nextTargetEv;
+      }
       if (renderDebug && !renderDebugExposureMeterLogged) {
         renderDebugExposureMeterLogged = true;
         console.info("[render-debug] WebGPU auto-exposure meter", {
           middleLog2Luminance: Number(middleLogLuminance.toFixed(4)),
-          targetEv: Number(nextTargetEv.toFixed(4)),
+          measuredTargetEv: Number(nextTargetEv.toFixed(4)),
+          targetEv: Number(exposureAdaptation.targetEv.toFixed(4)),
           currentEv: Number(exposureAdaptation.ev.toFixed(4)),
           effectiveExposure: Number(exposureNode.value.toFixed(5)),
           sampledBands: bandReads.length,
@@ -1038,7 +1046,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
         bloomNode.strength.value = grade.bloom * (lighting?.tod?.bloom ?? 1);
       if (shaftSunColor && lighting?.sun) {
         shaftSunColor.value.copy(lighting.sun.color);
-        shaftSunGain.value = lighting.sun.intensity;
+        shaftSunGain.value = Math.max(0, Math.min(1, lighting.sun.intensity * shaftSunGainScale));
       }
       if (dofState.auto) {
         dofState.auto.getWorldPosition(focusPosition);
@@ -1055,7 +1063,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       pipeline.render();
       if (grade.autoExposure) {
         exposureAdaptation.sampleElapsed += dt;
-        if (exposureAdaptation.sampleElapsed >= 0.25) {
+        if (exposureAdaptation.sampleElapsed >= 0.5) {
           exposureAdaptation.sampleElapsed = 0;
           requestExposureSample();
         }
