@@ -16,6 +16,7 @@ import {
   mix,
   mrt,
   normalView,
+  normalWorld,
   output,
   pass,
   packNormalToRGB,
@@ -76,38 +77,102 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   const tslMaterialTest = renderer.backend?.isWebGPUBackend === true
     ? query.get("tsltest")
     : null;
+  const requestedLightProbe = renderer.backend?.isWebGPUBackend === true
+    ? query.get("lprobe")
+    : null;
+  const tslLightProbe = (["nolights", "ambient", "hemi", "sun", "albedo"] as const)
+    .find((mode) => mode === requestedLightProbe) ?? null;
+  const usesLightProbe = tslLightProbe !== null;
+  const usesAuthoredAlbedoProbe = tslLightProbe === "albedo";
+  const requestedTslPostMode = renderer.backend?.isWebGPUBackend === true
+    ? query.get("tslpost")
+    : null;
+  const tslPostMode = requestedTslPostMode === "raw" || requestedTslPostMode === "aces"
+    ? requestedTslPostMode
+    : null;
+  const usesMaterialProbe = (usesLightProbe && !usesAuthoredAlbedoProbe)
+    || tslMaterialTest === "solid"
+    || tslMaterialTest === "lit"
+    || tslMaterialTest === "normal"
+    || tslMaterialTest === "emis";
+  const disablesProbeShadows = usesLightProbe
+    || tslMaterialTest === "lit"
+    || tslMaterialTest === "emis";
+  const tslDisableSun = renderer.backend?.isWebGPUBackend === true && query.has("nosun");
+  const tslDisableSkySunVisuals = (tslDisableSun || (usesLightProbe && tslLightProbe !== "sun"))
+    && !!lighting?.sky?.sunVisualNode;
+  const tslDisableShadows = renderer.backend?.isWebGPUBackend === true
+    && (query.has("noshadow") || usesLightProbe);
+  const lightProbeTarget = tslLightProbe === "ambient"
+    ? "AmbientLight"
+    : tslLightProbe === "hemi"
+      ? "HemisphereLight"
+      : tslLightProbe === "sun"
+        ? "NodeSun"
+        : null;
+  const applySunDisable = () => {
+    if (!tslDisableSun) return;
+    scene.traverse((object: any) => {
+      if (object.name === "NodeSun") object.visible = false;
+    });
+  };
+  const applyLightProbeSelection = () => {
+    if (!usesLightProbe) {
+      applySunDisable();
+      return;
+    }
+    scene.traverse((object: any) => {
+      if (!object.isLight) return;
+      // Reapply before rendering because streamed city lights can be rebuilt by lighting.update().
+      object.visible = lightProbeTarget !== null && (object.name || object.type) === lightProbeTarget;
+      object.castShadow = false;
+    });
+  };
+  if (tslDisableShadows) {
+    if (renderer.shadowMap) renderer.shadowMap.enabled = false;
+    scene.traverse((object: any) => {
+      if (object.isLight) object.castShadow = false;
+    });
+  }
+  if (tslDisableSkySunVisuals) lighting.sky.sunVisualNode.value = 0;
+  applyLightProbeSelection();
   const tslDisableEnvironment = renderer.backend?.isWebGPUBackend === true && query.has("tslnoenv");
   const requestedAmbientFill = query.has("tslfill") ? Number(query.get("tslfill")) : NaN;
   const probeAmbientFill = quality?.name === "low" ? 1.2 : 1.0;
   const probeVerticalFill = quality?.name === "low" ? 1.0 : 0.8;
-  // The WebGPU light list is present, but the captured plain Standard probe
-  // still produces near-zero scene radiance. Supply a restrained diffuse
-  // albedo fill in normal rendering; keep it lower on high quality to avoid
-  // adding to that preset's already-brighter image.
+  // Some authored WebGPU material graphs remain underlit in shadowed regions
+  // even though a plain Standard probe responds to the renderer's scene lights.
+  // Supply a restrained diffuse albedo fill in normal rendering, keeping it
+  // lower on high quality to avoid over-brightening that preset.
+// Increase WebGPU fallback fill to match WebGL2's missing diffuse bounce
   const productionAmbientFill = renderer.backend?.isWebGPUBackend !== true
     ? 0
     : quality?.name === "low"
-      ? 0.55
+      ? 1.15  // Increased from 0.55
       : quality?.name === "high"
-        ? 0.2
-        : 0.35;
+        ? 0.75  // Increased from 0.2
+        : 0.95; // Increased from 0.35
   const productionVerticalFill = renderer.backend?.isWebGPUBackend !== true
     ? 0
     : quality?.name === "low"
-      ? 0.45
+      ? 0.85  // Increased from 0.45
       : quality?.name === "high"
-        ? 0.2
-        : 0.3;
-  const nodeAmbientFillBase = Number.isFinite(requestedAmbientFill)
-    ? Math.max(0, Math.min(4, requestedAmbientFill))
-    : tslDisableEnvironment
-      ? probeAmbientFill
-      : productionAmbientFill;
-  const nodeVerticalFillBase = tslDisableEnvironment
-    ? probeVerticalFill
+        ? 0.5   // Increased from 0.2
+        : 0.7;  // Increased from 0.3
+  const nodeAmbientFillBase = usesAuthoredAlbedoProbe
+    ? 0
     : Number.isFinite(requestedAmbientFill)
-      ? 0
-      : productionVerticalFill;
+      ? Math.max(0, Math.min(4, requestedAmbientFill))
+      : tslDisableEnvironment
+        ? probeAmbientFill
+        : productionAmbientFill;
+  const nodeVerticalFillBase = usesAuthoredAlbedoProbe
+    ? 0
+    : tslDisableEnvironment
+      ? probeVerticalFill
+      : Number.isFinite(requestedAmbientFill)
+        ? 0
+        : productionVerticalFill;
   const previousFogNode = scene.fogNode;
   const fogColorNode = uniform(lighting?.fog?.tint?.clone?.() ?? new Vector3(0.84, 0.9, 1));
   const fogStartNode = uniform(lighting?.fog?.startDistance ?? 35);
@@ -179,7 +244,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   const filledMaterials = new WeakSet<object>();
   const solidProbeMaterials = new WeakSet<object>();
   const solidProbeOptOutNames: string[] = [];
-  let litProbeShadowReceiversDisabled = 0;
+  let probeShadowReceiversDisabled = 0;
   let filledMaterialCount = 0;
   let filledNodePbrCount = 0;
   let filledClassicPbrCount = 0;
@@ -187,14 +252,13 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   let lightingFallbackMode = "not installed";
   let aoNode: any = null;
   const prepareMaterialProbeOverrides = () => {
-    if (tslMaterialTest !== "solid" && tslMaterialTest !== "lit") return;
+    if (!usesMaterialProbe) return;
     scene.traverse((object: any) => {
-      // The lit probe isolates renderer lighting. A missing or invalid WebGPU
-      // shadow map could otherwise mask every light and make this test
-      // indistinguishable from a broken lighting node.
-      if (tslMaterialTest === "lit" && object.isMesh && object.receiveShadow) {
+      // Lighting probes disable shadow reception so a shadow map cannot mask
+      // the individual light contribution being inspected.
+      if (disablesProbeShadows && object.isMesh && object.receiveShadow) {
         object.receiveShadow = false;
-        litProbeShadowReceiversDisabled++;
+        probeShadowReceiversDisabled++;
       }
       const materials = Array.isArray(object.material)
         ? object.material
@@ -214,6 +278,10 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
     });
   };
   const installNodeAlbedoFill = () => {
+    if (usesAuthoredAlbedoProbe) {
+      lightingFallbackMode = "authored material albedo probe";
+      return;
+    }
     let testMaterialCount = 0;
     scene.traverse((object: any) => {
       const materials = Array.isArray(object.material)
@@ -261,7 +329,38 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
     filledMaterialCount += fillStats.nodePbr + fillStats.classicPbr;
   };
   installNodeAlbedoFill();
+  let authoredAlbedoProbeMaterialCount = 0;
+  const disableAuthoredAlbedoProbeLighting = () => {
+    if (!usesAuthoredAlbedoProbe) return;
+    scene.traverse((object: any) => {
+      const materials = Array.isArray(object.material)
+        ? object.material
+        : object.material
+          ? [object.material]
+          : [];
+      for (const material of materials) {
+        const standardNodeMaterial = material?.isNodeMaterial && (
+          material.isMeshStandardNodeMaterial || material.isMeshPhysicalNodeMaterial
+        );
+        if (!standardNodeMaterial || material.lights === false) continue;
+        material.lights = false;
+        material.needsUpdate = true;
+        authoredAlbedoProbeMaterialCount++;
+      }
+    });
+  };
+  if (usesAuthoredAlbedoProbe) {
+    disableAuthoredAlbedoProbeLighting();
+    // Repeat after streamed scene content has had a chance to attach materials.
+    setTimeout(() => {
+      disableAuthoredAlbedoProbeLighting();
+      console.info(`[tsl] authored albedo probe rescan disabled lighting on ${authoredAlbedoProbeMaterialCount} node PBR materials`);
+    }, 4000);
+  }
   console.info(`[tsl] lighting mode: ${lightingFallbackMode}; ${filledNodePbrCount} node PBR + ${filledClassicPbrCount} classic PBR materials patched (${filledMaterialCount} total)`);
+  if (usesAuthoredAlbedoProbe) {
+    console.info(`[tsl] authored albedo probe: lighting disabled on ${authoredAlbedoProbeMaterialCount} node PBR materials; waiting for a 4s streamed-material rescan`);
+  }
   const logTslDebugSetup = () => {
     const nodeMaterials = new Set<any>();
     const standardMaterials = new Set<any>();
@@ -297,6 +396,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       type: light.type || light.constructor?.name || "unknown",
       visible: light.visible,
       intensity: Number.isFinite(light.intensity) ? Number(light.intensity.toFixed(3)) : null,
+      castShadow: light.castShadow,
       color: light.color?.getHexString?.() ?? null,
       shadowMap: !!light.shadow?.map,
       shadowIntensity: Number.isFinite(light.shadow?.intensity)
@@ -327,10 +427,15 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
         visibleMeshCount,
         albedoFillMaterialCount: filledMaterialCount,
         materialTestMode: tslMaterialTest ?? "off",
-        sceneOverrideMaterial: tslMaterialTest === "solid" || tslMaterialTest === "lit",
+        lightProbeMode: tslLightProbe ?? "off",
+        authoredAlbedoProbeMaterialCount,
+        sceneOverrideMaterial: usesMaterialProbe,
+        sunDisabledByQuery: tslDisableSun,
+        skySunVisualsDisabledByQuery: tslDisableSkySunVisuals,
+        shadowsDisabledByQuery: tslDisableShadows,
         sceneOverrideOptOutMaterialCount: solidProbeOptOutNames.length,
         sceneOverrideOptOutMaterialSamples: solidProbeOptOutNames.slice(0, 12),
-        litProbeShadowReceiversDisabled,
+        probeShadowReceiversDisabled,
         sceneLightCount: sceneLights.length,
         environment: scene.environment?.isTexture
           ? {
@@ -347,6 +452,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
         lights,
       },
       post: {
+        diagnosticMode: tslPostMode ?? "full",
         autoExposure: grade.autoExposure,
         exposure: grade.exposure,
         exposureEv: exposureAdaptation.ev,
@@ -404,15 +510,30 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   let previousNodeBuilderHook: ((builder: any, renderObject: any) => void) | null = null;
 
   const scenePass = pass(scene, camera);
-  if (tslMaterialTest === "solid" || tslMaterialTest === "lit") {
+  if (usesMaterialProbe) {
     // `solid` bypasses materials and lights to validate geometry/pass output.
     // `lit` uses one plain TSL Standard material to test renderer lights
     // independently of the authored per-material graphs.
+    // `normal` visualizes world-space normals without scene lighting.
+    // `emis` uses a black Standard material with constant emissive output.
+    // `lprobe` selects one renderer light or disables Standard-material lights.
     prepareMaterialProbeOverrides();
-    const probeMaterial = tslMaterialTest === "solid"
-      ? new MeshBasicNodeMaterial({ color: 0xff00ff })
-      : new MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 });
-    probeMaterial.name = `WebGPU diagnostic ${tslMaterialTest} material`;
+    let probeMaterial: any;
+    if (usesLightProbe) {
+      probeMaterial = new MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 });
+      if (tslLightProbe === "nolights") probeMaterial.lights = false;
+    } else if (tslMaterialTest === "solid") {
+      probeMaterial = new MeshBasicNodeMaterial({ color: 0xff00ff });
+    } else if (tslMaterialTest === "normal") {
+      probeMaterial = new MeshBasicNodeMaterial({ color: 0xffffff });
+      probeMaterial.colorNode = normalWorld.mul(0.5).add(0.5);
+    } else if (tslMaterialTest === "emis") {
+      probeMaterial = new MeshStandardNodeMaterial({ color: 0x000000, roughness: 0.85 });
+      probeMaterial.emissiveNode = vec3(0.3, 0.3, 0.3);
+    } else {
+      probeMaterial = new MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 });
+    }
+    probeMaterial.name = `WebGPU diagnostic ${usesLightProbe ? `lprobe=${tslLightProbe}` : tslMaterialTest} material`;
     probeMaterial.fog = false;
     scenePass.overrideMaterial = probeMaterial;
   }
@@ -690,6 +811,22 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   );
 
   const gradedOutputNode = outputNode;
+  // Diagnostic outputs bypass the regular post chain so scene-pass values can
+  // be compared directly with the presented image. Match the production ACES
+  // exposure scaling used above; RenderPipeline still performs sRGB output.
+  const diagnosticOutputNode = tslPostMode === "raw"
+    ? vec4(sceneColor.rgb, float(1))
+    : tslPostMode === "aces"
+      ? vec4(
+          toneMapping(
+            ACESFilmicToneMapping,
+            exposureNode.mul(0.6),
+            sceneColor.rgb,
+          ),
+          float(1),
+        )
+      : gradedOutputNode;
+  const bypassOptionalPostEffects = tslPostMode !== null;
   const dofState = { focus: 8, aperture: 0, maxBlur: 16, auto: null as any };
   const motionState = {
     strength: 0,
@@ -708,13 +845,13 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   let pipeline: any;
 
   const rebuildEffects = () => {
-    let nextNode = gradedOutputNode;
+    let nextNode = diagnosticOutputNode;
     const previousDof = dofEffect;
     const previousMotionInput = motionInputTexture;
     motionInputTexture = null;
-    dofEffect = dofNode ? makeDofNode(nextNode) : null;
+    dofEffect = !bypassOptionalPostEffects && dofNode ? makeDofNode(nextNode) : null;
     if (dofEffect) nextNode = dofEffect;
-    if (motionEnabled) nextNode = makeMotionNode(nextNode);
+    if (!bypassOptionalPostEffects && motionEnabled) nextNode = makeMotionNode(nextNode);
     pipeline.outputNode = nextNode;
     pipeline.needsUpdate = true;
     if (previousDof && previousDof !== dofEffect) previousDof.dispose?.();
@@ -946,7 +1083,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
   // Tone mapping is explicit in the graph so grading happens after ACES, as in
   // the legacy path. RenderPipeline still performs the final linear-to-sRGB conversion.
   renderer.toneMapping = NoToneMapping;
-  pipeline = new RenderPipeline(renderer, outputNode);
+  pipeline = new RenderPipeline(renderer, diagnosticOutputNode);
 
   return {
     render(dt = 1 / 60) {
@@ -1060,6 +1197,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
         // WebGPU PBR graph while keeping the sun, ambient, and hemisphere lights.
         scene.environment = null;
       }
+      applyLightProbeSelection();
       pipeline.render();
       if (grade.autoExposure) {
         exposureAdaptation.sampleElapsed += dt;

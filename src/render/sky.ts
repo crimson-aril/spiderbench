@@ -394,6 +394,7 @@ function createNodeSky(quality = {}) {
   const horizonNode = TSL.uniform(horizonTint);
   const glowNode = TSL.uniform(glowTint);
   const sunColorNode = TSL.uniform(sunColor);
+  const sunVisualNode = TSL.uniform(1);
   const cloudCoverageNode = TSL.uniform(params.cloudCoverage);
   const cloudDensityNode = TSL.uniform(params.cloudDensity);
   const cloudScaleNode = TSL.uniform(params.cloudScale);
@@ -490,7 +491,7 @@ function createNodeSky(quality = {}) {
     TSL.smoothstep(-0.04, 0.28, sunDirectionNode.y),
   ).mul(TSL.float(1).sub(nightNode.mul(0.58)));
   const cloudLit = cloudBase.mul(skyRadianceNode).add(
-    sunColorNode.mul(TSL.pow(sunCos, 3).mul(cloudSunNode).mul(0.025)),
+    sunColorNode.mul(TSL.pow(sunCos, 3).mul(cloudSunNode).mul(0.025)).mul(sunVisualNode),
   );
   const overcastSky = TSL.vec3(0.42, 0.45, 0.48).mul(TSL.float(0.35).add(skyGradient.mul(0.25)));
   const atmosphere = TSL.mix(baseSky.add(horizonGlow), overcastSky, overcastNode.mul(0.8))
@@ -499,7 +500,7 @@ function createNodeSky(quality = {}) {
   const starHash = TSL.fract(TSL.sin(TSL.dot(starCell, TSL.vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
   const stars = TSL.step(0.9985, starHash).mul(TSL.smoothstep(0.02, 0.35, height)).mul(starsNode);
   material.colorNode = TSL.mix(atmosphere, cloudLit, cloudMask)
-    .add(sunColorNode.mul(solarDisc.add(solarGlow.mul(cloudSunNode).mul(0.01))))
+    .add(sunColorNode.mul(solarDisc.add(solarGlow.mul(cloudSunNode).mul(0.01))).mul(sunVisualNode))
     .add(TSL.vec3(stars));
 
   const mesh = new THREE.Mesh(
@@ -633,6 +634,7 @@ function createNodeSky(quality = {}) {
     params,
     sunDir,
     sunColor,
+    sunVisualNode,
     environmentTexture: envTexture,
     skyUniforms,
     mesh,

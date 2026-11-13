@@ -11,6 +11,7 @@ const smoothMask = (value, lo, hi) =>
 
 /** TSL approximation of the city's heavily customized GLSL facade shader. */
 export function createFacadeNodeMaterial(T) {
+  const facadeProbe = new URLSearchParams(window.location.search).get("lprobe");
   const material = new WEBGPU.MeshStandardNodeMaterial({
     color: 0xffffff,
     roughness: 0.82,
@@ -72,16 +73,18 @@ export function createFacadeNodeMaterial(T) {
     TSL.fract(seed.mul(0.377)).mul(8),
   );
   const wallUv = facade.add(buildingOffset).div(scale);
-  let wallColor = TSL.texture(T.wallsCol, wallUv).depth(TSL.int(layer)).rgb;
+  const wallTextureSample = TSL.texture(T.wallsCol, wallUv).depth(TSL.int(layer)).rgb;
+  const wallBaseColor = wallTextureSample.mul(tint);
+  let wallColor = wallBaseColor;
   const worldNoiseUv = TSL.vec2(
     worldPosition.x.add(worldPosition.z.mul(0.37)).div(47),
     worldPosition.y.div(83).add(seed.mul(0.071)),
   );
   const broadWeather = TSL.texture(T.noise, worldNoiseUv).rgb;
   wallColor = wallColor
-    .mul(tint)
     .mul(TSL.float(0.88).add(broadWeather.r.mul(0.22)))
     .mul(TSL.float(0.92).add(broadWeather.g.mul(0.14)));
+  const wallWeatherColor = wallColor;
 
   const lowFloorGrime = TSL.mix(
     TSL.float(0.7),
@@ -89,6 +92,7 @@ export function createFacadeNodeMaterial(T) {
     TSL.smoothstep(0, 2.5, y),
   );
   wallColor = wallColor.mul(lowFloorGrime);
+  const wallGrimeColor = wallColor;
 
   const activeWindows = style.greaterThan(0.5).and(style.lessThan(4.5));
   const usableWidth = faceWidth.sub(dimensions.w.mul(2)).max(1);
@@ -164,6 +168,7 @@ export function createFacadeNodeMaterial(T) {
   );
   wallColor = TSL.mix(wallColor, openingColor, glassMask);
   wallColor = TSL.mix(wallColor, tint.mul(0.62), mullions.mul(0.72));
+  const wallWindowColor = wallColor;
 
   // The crown tier uses a bright metallic shell and a segmented, emissive
   // arched band instead of the GLSL shader's more detailed Chrysler sunburst.
@@ -183,6 +188,7 @@ export function createFacadeNodeMaterial(T) {
   const crownGlass = crownBand.mul(crownSpokes).mul(isCrown);
   wallColor = TSL.mix(wallColor, TSL.vec3(0.56, 0.575, 0.6), isCrown);
   wallColor = TSL.mix(wallColor, TSL.vec3(0.035, 0.04, 0.05), crownGlass);
+  const wallCrownColor = wallColor;
 
   // Sample the WebGPU sky texture directly along the reflected world-space
   // ray so facade glass keeps a live reflection even before SSR is composited.
@@ -199,7 +205,18 @@ export function createFacadeNodeMaterial(T) {
     )
     .mul(TSL.float(1).sub(night.mul(0.55)));
 
-  material.colorNode = wallColor;
+  const facadeProbeColor = {
+    walltex: wallTextureSample,
+    walllayer: TSL.vec3(layer.div(15), TSL.float(1).sub(layer.div(15)), 0.2),
+    walltint: tint,
+    wallbase: wallBaseColor,
+    wallweather: wallWeatherColor,
+    wallgrime: wallGrimeColor,
+    wallwindows: wallWindowColor,
+    wallcrown: wallCrownColor,
+  }[facadeProbe];
+  const isFacadeProbe = facadeProbeColor !== undefined;
+  material.colorNode = facadeProbeColor ?? wallColor;
   material.roughnessNode = TSL.select(
     crownGlass.greaterThan(0.01),
     TSL.float(0.1),
@@ -229,7 +246,23 @@ export function createFacadeNodeMaterial(T) {
   const emission = nightEmission.add(glassReflection).add(
     crownGlass.mul(night).mul(TSL.vec3(0.85, 0.92, 1)).mul(1.8),
   );
-  material.emissiveNode = emission;
+  material.emissiveNode = isFacadeProbe ? TSL.vec3(0) : emission;
+  if (isFacadeProbe) {
+    material.lights = false;
+    material.userData.facadeProbe = facadeProbe;
+    material.needsUpdate = true;
+    if (facadeProbe === "walltex") {
+      console.info("[tsl] facade wall texture probe", {
+        textureType: T.wallsCol?.constructor?.name,
+        compressedArray: T.wallsCol?.isCompressedArrayTexture === true,
+        depth: T.wallsCol?.image?.depth,
+        width: T.wallsCol?.image?.width,
+        height: T.wallsCol?.image?.height,
+        mipLevels: T.wallsCol?.mipmaps?.length,
+        colorSpace: T.wallsCol?.colorSpace,
+      });
+    }
+  }
   // Carry the facade-glass SSR mask through the opaque scene pass alpha.
   material.opacityNode = TSL.float(1).add(glassMask.max(crownGlass).clamp());
   facadeNodeData.set(material, {
@@ -245,7 +278,7 @@ export function createFacadeNodeMaterial(T) {
 export function deriveFacadeNodeMaterial(base, farNight = false) {
   const material = base.clone();
   const nodes = facadeNodeData.get(base);
-  if (nodes && farNight) {
+  if (nodes && farNight && !base.userData.facadeProbe) {
     const farNightScale = TSL.float(1).sub(nodes.night.mul(0.8));
     material.colorNode = nodes.colorNode.mul(farNightScale);
     material.emissiveNode = nodes.emissiveNode.mul(farNightScale);

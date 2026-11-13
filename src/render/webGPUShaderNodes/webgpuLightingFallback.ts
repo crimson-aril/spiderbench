@@ -62,7 +62,8 @@ export function applyWebGPULightingFallback(
       const sideFacingFill = float(1).add(
         smoothstep(0.2, 0.85, verticality).mul(verticalFillNode),
       );
-      const fill = albedo.max(vec3(0.16, 0.18, 0.2))
+      // Raise minimum albedo floor and fill intensity to prevent near-black surfaces
+      const fill = albedo.max(vec3(0.28, 0.32, 0.38)) // Raised from (0.16, 0.18, 0.2)
         .mul(ambientFillNode)
         .mul(materialFillScale)
         .mul(sideFacingFill);
