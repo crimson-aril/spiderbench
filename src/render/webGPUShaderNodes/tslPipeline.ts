@@ -317,12 +317,18 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       lightingFallbackMode = "renderer lights only";
       return;
     }
+    const facadeFillProbe = query.get("lprobe");
+    const diagnosticFacadeFill = facadeFillProbe === "wallfill"
+      ? "isolated"
+      : facadeFillProbe === "wallfillpbr"
+        ? "replace-emission"
+        : false;
     const fillStats = applyWebGPULightingFallback(
       scene,
       renderer,
       nodeAmbientFill,
       nodeVerticalFill,
-      query.get("lprobe") === "wallfill",
+      diagnosticFacadeFill,
     );
     lightingFallbackMode = "TSL albedo ambient + side-facing fill";
     filledNodePbrCount += fillStats.nodePbr;

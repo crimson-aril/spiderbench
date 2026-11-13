@@ -27,7 +27,7 @@ export function applyWebGPULightingFallback(
   renderer: any,
   ambientFill: any = 0.65,
   verticalFill: any = 1.2,
-  diagnosticFacadeFill = false,
+  diagnosticFacadeFill: "isolated" | "replace-emission" | false = false,
 ): { nodePbr: number; classicPbr: number } {
   if (renderer?.backend?.isWebGPUBackend !== true) return { nodePbr: 0, classicPbr: 0 };
 
@@ -111,14 +111,15 @@ export function applyWebGPULightingFallback(
         .mul(materialFillScale)
         .mul(sideFacingFill);
 
-      // `materialEmissive` reads the authored emissive color, intensity, and
-      // map independently of emissiveNode, so the fallback preserves them.
       if (isFacade && diagnosticFacadeFill) {
-        // Isolate the fallback graph on actual facade meshes: render only the
-        // computed fill through emissive, with authored lighting/color removed.
-        material.colorNode = vec3(0);
+        // Render the computed fill through emissive on actual facade meshes.
+        // The isolated mode also removes authored color and standard lighting;
+        // replace-emission mode preserves those and changes only the emission.
+        if (diagnosticFacadeFill === "isolated") {
+          material.colorNode = vec3(0);
+          material.lights = false;
+        }
         material.emissiveNode = fill;
-        material.lights = false;
       } else {
         // `materialEmissive` reads the authored emissive color, intensity, and
         // map independently of emissiveNode, so preserve them on normal runs.
