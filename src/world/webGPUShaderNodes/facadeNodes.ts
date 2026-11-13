@@ -216,6 +216,7 @@ export function createFacadeNodeMaterial(T) {
     wallcrown: wallCrownColor,
   }[facadeProbe];
   const isFacadeProbe = facadeProbeColor !== undefined;
+  const isGlassReflectionProbe = facadeProbe === "wallfillreflection";
   material.colorNode = facadeProbeColor ?? wallColor;
   material.roughnessNode = TSL.select(
     crownGlass.greaterThan(0.01),
@@ -246,9 +247,13 @@ export function createFacadeNodeMaterial(T) {
   const emission = nightEmission.add(glassReflection).add(
     crownGlass.mul(night).mul(TSL.vec3(0.85, 0.92, 1)).mul(1.8),
   );
-  material.emissiveNode = isFacadeProbe ? TSL.vec3(0) : emission;
-  if (isFacadeProbe) {
-    material.lights = false;
+  material.emissiveNode = isFacadeProbe
+    ? TSL.vec3(0)
+    : isGlassReflectionProbe
+      ? glassReflection
+      : emission;
+  if (isFacadeProbe || isGlassReflectionProbe) {
+    if (isFacadeProbe) material.lights = false;
     material.userData.facadeProbe = facadeProbe;
     material.needsUpdate = true;
     if (facadeProbe === "walltex") {
