@@ -27,6 +27,7 @@ export function applyWebGPULightingFallback(
   renderer: any,
   ambientFill: any = 0.65,
   verticalFill: any = 1.2,
+  diagnosticFacadeFill = false,
 ): { nodePbr: number; classicPbr: number } {
   if (renderer?.backend?.isWebGPUBackend !== true) return { nodePbr: 0, classicPbr: 0 };
 
@@ -112,8 +113,18 @@ export function applyWebGPULightingFallback(
 
       // `materialEmissive` reads the authored emissive color, intensity, and
       // map independently of emissiveNode, so the fallback preserves them.
-      const authoredEmission = material.emissiveNode ?? materialEmissive;
-      material.emissiveNode = vec3(authoredEmission).add(fill);
+      if (isFacade && diagnosticFacadeFill) {
+        // Isolate the fallback graph on actual facade meshes: render only the
+        // computed fill through emissive, with authored lighting/color removed.
+        material.colorNode = vec3(0);
+        material.emissiveNode = fill;
+        material.lights = false;
+      } else {
+        // `materialEmissive` reads the authored emissive color, intensity, and
+        // map independently of emissiveNode, so preserve them on normal runs.
+        const authoredEmission = material.emissiveNode ?? materialEmissive;
+        material.emissiveNode = vec3(authoredEmission).add(fill);
+      }
       material.needsUpdate = true;
       patchedMaterials.add(material);
       if (isFacade) {
@@ -131,6 +142,7 @@ export function applyWebGPULightingFallback(
   if (facadeMaterialReferenceCount > 0) {
     const uniqueFacadeMaterials = [...facadeMaterials.values()];
     const facadePassSummary = {
+      diagnosticFacadeFill,
       facadeMeshCount: facadeObjectCount,
       facadeMaterialReferenceCount,
       uniqueFacadeMaterialCount: uniqueFacadeMaterials.length,

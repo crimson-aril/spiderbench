@@ -322,6 +322,7 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       renderer,
       nodeAmbientFill,
       nodeVerticalFill,
+      query.get("lprobe") === "wallfill",
     );
     lightingFallbackMode = "TSL albedo ambient + side-facing fill";
     filledNodePbrCount += fillStats.nodePbr;
