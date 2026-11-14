@@ -481,10 +481,13 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
         },
         ambientOcclusion: {
           enabled: !!quality?.ao,
-              implementation: aoNode ? "n8ao-webgpu N8AONode" : "disabled",
+          implementation: aoNode ? "n8ao-webgpu N8AONode" : "disabled",
           quality: quality?.aoQuality ?? null,
-              resolutionScale: aoNode?.configuration?.halfRes ? 0.5 : 1,
-              samples: aoNode?.configuration?.aoSamples ?? null,
+          depthMode: aoNode
+            ? aoNode.configuration.depthBufferType === DepthType.Reverse ? "reverse" : "standard"
+            : null,
+          resolutionScale: aoNode?.configuration?.halfRes ? 0.5 : 1,
+          samples: aoNode?.configuration?.aoSamples ?? null,
         },
         fogDensity: lighting?.fog?.density ?? null,
       },
@@ -623,7 +626,10 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
       scenePassNode: scenePass,
       scene,
       camera,
-      depthBufferType: DepthType.Reverse,
+      depthBufferType:
+        (renderer?.reversedDepthBuffer ?? camera?.reversedDepth) === true
+          ? DepthType.Reverse
+          : DepthType.Default,
     });
     aoNode.setQualityMode(quality.aoQuality ?? "Medium");
     aoNode.configuration.gammaCorrection = false;
@@ -631,9 +637,9 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
     aoNode.configuration.halfRes = !!quality.aoHalfRes;
     aoNode.configuration.depthAwareUpsampling = true;
     aoNode.configuration.transparencyAware = false;
-    aoNode.configuration.aoRadius = 3.0;
+    aoNode.configuration.aoRadius = 2.0;
     aoNode.configuration.distanceFalloff = 0.9;
-    aoNode.configuration.intensity = 3.4;
+    aoNode.configuration.intensity = 1.5;
     aoNode.configuration.color.setHex(0x0e0b09);
     if (!quality.aoHalfRes) {
       aoNode.configuration.aoSamples = 4;
@@ -1115,6 +1121,9 @@ export function createTslPipeline({ renderer, scene, camera, lighting, quality }
               enabled: !!quality?.ao,
               implementation: aoNode ? "n8ao-webgpu N8AONode" : "disabled",
               quality: quality?.aoQuality ?? null,
+              depthMode: aoNode
+                ? aoNode.configuration.depthBufferType === DepthType.Reverse ? "reverse" : "standard"
+                : null,
               resolutionScale: aoNode?.configuration?.halfRes ? 0.5 : 1,
               samples: aoNode?.configuration?.aoSamples ?? null,
             },

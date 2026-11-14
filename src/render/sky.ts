@@ -20,6 +20,17 @@ import { GLSL_ATMOS, sunTransmittance } from "./atmosphere.ts";
 import * as WEBGPU from "three/webgpu";
 import * as TSL from "three/tsl";
 import { usesNodeMaterialBackend } from "./backendState.ts";
+import {
+  CLOUD_LAYER,
+  CLOUD_NOISE_SIZE,
+  CLOUD_DETAIL_Y,
+  CLOUD_DETAIL2_Y,
+  cloudBaseNoiseY,
+  cloudLayerHeightKm,
+  createCloudLayerScratch,
+  createCloudNoiseData,
+  evaluateCloudLayer,
+} from "./cloudLayer.ts";
 
 const skyShader = lazyShaderSections(() => skyShaderSource);
 
@@ -119,7 +130,7 @@ export function createSky(renderer, quality) {
     cloudAmb: 0.8,
     cloudScale: 0.13,
     cirrus: 0.6,
-    // Milder erosion and broader detail keep half-resolution raymarches from breaking into bright speckles.
+    // Keep the WebGL2 reference cloud profile unchanged.
     cloudErode: 0.58,
     cloudDetailScale: 1.65,
     // (atmosphere r1) brighter, larger cumulus + cirrus veil
@@ -346,6 +357,22 @@ export function createSky(renderer, quality) {
   };
 }
 
+/** Tileable Worley distance fields shared with the CPU cloud-layer projection. */
+function createCloudNoiseTexture() {
+  const size = CLOUD_NOISE_SIZE;
+  const data = createCloudNoiseData(size);
+  const texture = new THREE.Data3DTexture(data, size, size, size);
+  texture.format = THREE.RGBAFormat;
+  texture.type = THREE.UnsignedByteType;
+  texture.wrapS = texture.wrapT = texture.wrapR = THREE.RepeatWrapping;
+  texture.magFilter = texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.unpackAlignment = 1;
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 /** TSL sky dome and compact environment map for WebGPU and the WebGL2 node backend. */
 function createNodeSky(quality = {}) {
   const params = {
@@ -362,10 +389,12 @@ function createNodeSky(quality = {}) {
     cloudFade: 28,
     cloudSun: 4.3,
     cloudAmb: 0.8,
-    cloudScale: 0.13,
+    // Double the horizontal base-noise frequency to halve the oversized NodeSky cloud lobes.
+    cloudScale: 0.26,
     cirrus: 0.6,
-    cloudErode: 0.58,
-    cloudDetailScale: 1.65,
+    // Softer erosion rounds the TSL cloud lobes instead of cutting sharp tips.
+    cloudErode: 0.42,
+    cloudDetailScale: 1.35,
     cloudBaseDark: 0.9,
     skylineVisible: 1,
     lightScale: 1,
@@ -402,6 +431,8 @@ function createNodeSky(quality = {}) {
   const nightNode = TSL.uniform(params.night);
   const overcastNode = TSL.uniform(params.overcast);
   const starsNode = TSL.uniform(params.stars);
+  const cloudNoiseTexture = createCloudNoiseTexture();
+  const cloudNoiseData = cloudNoiseTexture.image.data;
 
   const envSize = quality?.name === "high" ? [256, 128] : quality?.name === "low" ? [64, 32] : [128, 64];
   const envData = new Uint16Array(envSize[0] * envSize[1] * 4);
@@ -437,21 +468,6 @@ function createNodeSky(quality = {}) {
     return sign | (exponent << 10) | ((mantissa + 0x1000) >>> 13);
   };
 
-  const hash2 = (point) => TSL.fract(TSL.sin(TSL.dot(point, TSL.vec2(127.1, 311.7))).mul(43758.5453));
-  const valueNoise = (point) => {
-    const cell = TSL.floor(point);
-    const f = TSL.fract(point);
-    const blend = f.mul(f).mul(TSL.vec2(3).sub(f.mul(2)));
-    return TSL.mix(
-      TSL.mix(hash2(cell), hash2(cell.add(TSL.vec2(1, 0))), blend.x),
-      TSL.mix(hash2(cell.add(TSL.vec2(0, 1))), hash2(cell.add(TSL.vec2(1, 1))), blend.x),
-      blend.y,
-    );
-  };
-  const cloudFbm = (point) => valueNoise(point).mul(0.64)
-    .add(valueNoise(point.mul(1.9).add(3.7)).mul(0.28))
-    .add(valueNoise(point.mul(3.1).sub(1.9)).mul(0.08));
-
   const material = new WEBGPU.MeshBasicNodeMaterial();
   material.name = "NodeSky.TSL";
   material.side = WEBGPU.BackSide;
@@ -478,19 +494,137 @@ function createNodeSky(quality = {}) {
     TSL.float(1).sub(height.abs()).max(0),
     3,
   ).mul(glowNode);
-  const cloudUv = direction.xz.div(height.max(0.07)).mul(cloudScaleNode.mul(5.5)).add(TSL.vec2(0.31, 0.73));
-  const cloudField = quality?.name === "low" ? valueNoise(cloudUv) : cloudFbm(cloudUv);
-  const cloudCoverage = TSL.max(cloudCoverageNode, overcastNode.mul(0.95));
-  const cloudThreshold = TSL.float(0.79).sub(cloudCoverage.mul(0.43));
-  const cloudMask = TSL.smoothstep(cloudThreshold, cloudThreshold.add(0.22), cloudField)
+  // Project the view ray onto a horizontal approximation of the cloud slab.
+  // WebGL2 raymarches a curved shell; sampling the sky direction as a 3D point
+  // made the TSL clouds look like upright blobs instead of clouds sitting on a layer.
+  const cloudLayerKm = cloudLayerHeightKm(params.cloudBottom, params.cloudTop);
+  const cloudDistanceKm = TSL.float(cloudLayerKm).div(height.max(CLOUD_LAYER.minRayY));
+  const cloudPlaneX = direction.x.mul(cloudDistanceKm).add(CLOUD_LAYER.offsetKm[0]);
+  const cloudPlaneZ = direction.z.mul(cloudDistanceKm).add(CLOUD_LAYER.offsetKm[1]);
+  const cloudU = cloudPlaneX.mul(cloudScaleNode);
+  const cloudV = TSL.float(cloudBaseNoiseY(cloudLayerKm));
+  const cloudW = cloudPlaneZ.mul(cloudScaleNode);
+  const cloudWorley = (distance) => TSL.float(1).sub(distance.mul(Math.sqrt(3))).max(0).min(1);
+  const cloudWarpNode = TSL.texture3D(
+    cloudNoiseTexture,
+    TSL.vec3(
+      cloudU.mul(CLOUD_LAYER.warpScale).add(0.17),
+      cloudV.mul(CLOUD_LAYER.warpScale).add(0.37),
+      cloudW.mul(CLOUD_LAYER.warpScale).add(0.71),
+    ),
+  );
+  const cloudX = cloudU.add(cloudWarpNode.g.sub(cloudWarpNode.r).mul(CLOUD_LAYER.warpAmount));
+  const cloudY = cloudV.add(cloudWarpNode.b.sub(cloudWarpNode.g).mul(CLOUD_LAYER.warpAmount));
+  const cloudZ = cloudW.add(cloudWarpNode.a.sub(cloudWarpNode.b).mul(CLOUD_LAYER.warpAmount));
+  const cloudNoiseNode = TSL.texture3D(cloudNoiseTexture, TSL.vec3(cloudX, cloudY, cloudZ));
+  const cloudLowFrequency = cloudWorley(cloudNoiseNode.g).mul(0.625)
+    .add(cloudWorley(cloudNoiseNode.b).mul(0.25))
+    .add(cloudWorley(cloudNoiseNode.a).mul(0.125));
+  const cloudBaseWorley = cloudWorley(cloudNoiseNode.r);
+  const cloudShape = TSL.clamp(
+    cloudBaseWorley.add(TSL.float(1).sub(cloudLowFrequency).mul(0.6))
+      .div(TSL.float(1).add(TSL.float(1).sub(cloudLowFrequency).mul(0.6))),
+    0,
+    1,
+  );
+  const cloudWeatherLow = TSL.texture3D(
+    cloudNoiseTexture,
+    TSL.vec3(
+      cloudPlaneX.mul(CLOUD_LAYER.weatherLowScale),
+      0.31,
+      cloudPlaneZ.mul(CLOUD_LAYER.weatherLowScale),
+    ),
+  );
+  const cloudWeatherMid = TSL.texture3D(
+    cloudNoiseTexture,
+    TSL.vec3(
+      cloudPlaneX.mul(CLOUD_LAYER.weatherMidScale).add(0.5),
+      0.71,
+      cloudPlaneZ.mul(CLOUD_LAYER.weatherMidScale).add(0.5),
+    ),
+  );
+  const cloudCoverage = TSL.clamp(
+    TSL.max(cloudCoverageNode.mul(CLOUD_LAYER.coverageScale), overcastNode.mul(0.95))
+      .mul(TSL.float(0.55).add(
+        TSL.smoothstep(0.1, 0.8, cloudWorley(cloudWeatherLow.r)).mul(0.8),
+      ))
+      .mul(TSL.float(0.8).add(cloudWorley(cloudWeatherMid.r).mul(0.4))),
+    0,
+    1,
+  );
+  const cloudTop = TSL.float(0.35).add(cloudCoverage.mul(0.65));
+  const cloudProfile = TSL.float(1).sub(TSL.smoothstep(
+    cloudTop.mul(0.4),
+    cloudTop,
+    CLOUD_LAYER.sampleHeightFraction,
+  ));
+  const unfilteredCloudDensity = cloudShape.mul(cloudProfile)
+    .sub(TSL.float(1).sub(cloudCoverage))
+    .div(cloudCoverage.max(0.02))
+    .max(0)
+    .min(1);
+  let cloudDensity = TSL.select(cloudCoverage.greaterThan(0.02), unfilteredCloudDensity, TSL.float(0));
+  const cloudDetailNode = TSL.texture3D(
+    cloudNoiseTexture,
+    TSL.vec3(
+      cloudPlaneX.mul(params.cloudDetailScale),
+      CLOUD_DETAIL_Y,
+      cloudPlaneZ.mul(params.cloudDetailScale),
+    ),
+  );
+  const cloudDetailFbm = cloudWorley(cloudDetailNode.g).mul(0.625)
+    .add(cloudWorley(cloudDetailNode.b).mul(0.25))
+    .add(cloudWorley(cloudDetailNode.a).mul(0.125));
+  const cloudDetailFade = TSL.float(1).sub(
+    TSL.float(1 - CLOUD_LAYER.detail1FarKeep).mul(TSL.smoothstep(
+      CLOUD_LAYER.detail1FadeKm[0],
+      CLOUD_LAYER.detail1FadeKm[1],
+      cloudDistanceKm,
+    )),
+  );
+  const cloudErosion = TSL.float(1).sub(cloudDetailFbm)
+    .mul(params.cloudErode)
+    .mul(cloudDetailFade);
+  cloudDensity = cloudDensity.sub(cloudErosion).div(TSL.float(1).sub(cloudErosion)).max(0).min(1);
+  const cloudDetail2Node = TSL.texture3D(
+    cloudNoiseTexture,
+    TSL.vec3(
+      cloudPlaneX.mul(params.cloudDetailScale * CLOUD_LAYER.detail2Scale).add(0.37),
+      CLOUD_DETAIL2_Y,
+      cloudPlaneZ.mul(params.cloudDetailScale * CLOUD_LAYER.detail2Scale).add(0.11),
+    ),
+  );
+  const cloudDetail2 = TSL.float(1).sub(
+    cloudWorley(cloudDetail2Node.g).mul(0.6).add(cloudWorley(cloudDetail2Node.b).mul(0.4)),
+  );
+  const cloudDetail2Fade = TSL.float(1).sub(TSL.smoothstep(
+    CLOUD_LAYER.detail2FadeKm[0],
+    CLOUD_LAYER.detail2FadeKm[1],
+    cloudDistanceKm,
+  ));
+  const cloudErosion2 = cloudDetail2.mul(CLOUD_LAYER.detail2Erode)
+    .mul(TSL.float(1).sub(cloudDensity.div(0.45)).max(0))
+    .mul(cloudDetail2Fade);
+  cloudDensity = cloudDensity.sub(cloudErosion2)
+    .div(TSL.float(1).sub(cloudErosion2)).max(0).min(1);
+  const cloudPathKm = TSL.float(CLOUD_LAYER.thicknessKm)
+    .div(height.max(CLOUD_LAYER.minPathRayY));
+  const cloudOpticalDepth = cloudDensity
     .mul(cloudDensityNode)
-    .mul(TSL.smoothstep(-0.08, 0.16, height));
+    .mul(cloudPathKm)
+    .mul(CLOUD_LAYER.sigmaPerKm);
+  const cloudAlpha = TSL.float(1).sub(TSL.exp(cloudOpticalDepth.negate()))
+    .mul(TSL.exp(cloudDistanceKm.div(params.cloudFade * 3.5).negate()))
+    .mul(TSL.smoothstep(CLOUD_LAYER.horizonFadeY[0], CLOUD_LAYER.horizonFadeY[1], height));
+  const cloudMask = cloudAlpha;
+  const cloudInterior = TSL.smoothstep(0.08, 0.75, cloudDensity);
+  const cloudShade = TSL.float(0.68).add(cloudInterior.mul(0.22));
   const cloudBase = TSL.mix(
     TSL.vec3(0.17, 0.19, 0.23),
     TSL.vec3(0.76, 0.79, 0.82),
     TSL.smoothstep(-0.04, 0.28, sunDirectionNode.y),
   ).mul(TSL.float(1).sub(nightNode.mul(0.58)));
-  const cloudLit = cloudBase.mul(skyRadianceNode).add(
+  const cloudLit = cloudBase.mul(cloudShade).mul(skyRadianceNode).add(
     sunColorNode.mul(TSL.pow(sunCos, 3).mul(cloudSunNode).mul(0.025)).mul(sunVisualNode),
   );
   const overcastSky = TSL.vec3(0.42, 0.45, 0.48).mul(TSL.float(0.35).add(skyGradient.mul(0.25)));
@@ -557,18 +691,6 @@ function createNodeSky(quality = {}) {
     const t = THREE.MathUtils.clamp((value - a) / (b - a), 0, 1);
     return t * t * (3 - 2 * t);
   };
-  const hashNoise = (x, y) => {
-    const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-    return n - Math.floor(n);
-  };
-  const noiseAt = (x, y) => {
-    const ix = Math.floor(x), iy = Math.floor(y);
-    const fx0 = x - ix, fy0 = y - iy;
-    const fx = fx0 * fx0 * (3 - 2 * fx0), fy = fy0 * fy0 * (3 - 2 * fy0);
-    const a = THREE.MathUtils.lerp(hashNoise(ix, iy), hashNoise(ix + 1, iy), fx);
-    const b = THREE.MathUtils.lerp(hashNoise(ix, iy + 1), hashNoise(ix + 1, iy + 1), fx);
-    return THREE.MathUtils.lerp(a, b, fy);
-  };
   function bakeEnvironment() {
     if (!envDirty) return envTexture;
     const [width, height] = envSize;
@@ -578,6 +700,17 @@ function createNodeSky(quality = {}) {
     const day = smoothstep(-0.08, 0.16, sunDir.y);
     const c = new THREE.Vector3();
     const cloudColor = new THREE.Vector3();
+    const cloudScratch = createCloudLayerScratch();
+    const cloudSample = { density: 0, alpha: 0, fade: 0, distanceKm: 0 };
+    const cloudConfig = {
+      coverage: Math.max(params.cloudCoverage * CLOUD_LAYER.coverageScale, params.overcast * 0.95),
+      cloudScale: params.cloudScale,
+      detailScale: params.cloudDetailScale,
+      erode: params.cloudErode,
+      cloudDensity: params.cloudDensity,
+      cloudFade: params.cloudFade,
+      layerKm: cloudLayerHeightKm(params.cloudBottom, params.cloudTop),
+    };
     const baseH = new THREE.Vector3(0.035, 0.043, 0.065).lerp(new THREE.Vector3(0.48, 0.61, 0.78), day);
     const baseZ = new THREE.Vector3(0.006, 0.009, 0.018).lerp(new THREE.Vector3(0.13, 0.31, 0.68), day);
     for (let y = 0; y < height; y++) {
@@ -592,22 +725,14 @@ function createNodeSky(quality = {}) {
         c.copy(baseH).lerp(baseZ, skyMix);
         c.set(c.x * tint[0] + glow[0] * Math.exp(-Math.max(se, 0) * 7), c.y * tint[1] + glow[1] * Math.exp(-Math.max(se, 0) * 7), c.z * tint[2] + glow[2] * Math.exp(-Math.max(se, 0) * 7));
         c.multiplyScalar(skyRadianceScale);
-        const cloudUvX = dx / Math.max(se, 0.07) * params.cloudScale * 5.5 + 0.31;
-        const cloudUvY = dz / Math.max(se, 0.07) * params.cloudScale * 5.5 + 0.73;
-        const cloudField = quality?.name === "low"
-          ? noiseAt(cloudUvX, cloudUvY)
-          : noiseAt(cloudUvX, cloudUvY) * 0.64
-            + noiseAt(cloudUvX * 1.9 + 3.7, cloudUvY * 1.9 + 3.7) * 0.28
-            + noiseAt(cloudUvX * 3.1 - 1.9, cloudUvY * 3.1 - 1.9) * 0.08;
-        const coverage = Math.max(params.cloudCoverage, params.overcast * 0.95);
-        const threshold = 0.79 - coverage * 0.43;
-        const cloud = smoothstep(threshold, threshold + 0.22, cloudField)
-          * params.cloudDensity * smoothstep(-0.08, 0.16, se);
+        evaluateCloudLayer(cloudNoiseData, dx, se, dz, cloudConfig, cloudScratch, cloudSample);
+        const cloudShade = 0.68 + smoothstep(0.08, 0.75, cloudSample.density) * 0.22;
+        const cloud = cloudSample.alpha;
         const cloudLight = THREE.MathUtils.lerp(0.17, 0.76, smoothstep(-0.04, 0.28, sunDir.y))
           * (1 - params.night * 0.58);
-        const cloudR = cloudLight * 0.99 * skyRadianceScale + sunColor.r * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
-        const cloudG = cloudLight * 1.02 * skyRadianceScale + sunColor.g * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
-        const cloudB = cloudLight * 1.06 * skyRadianceScale + sunColor.b * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudR = cloudLight * cloudShade * 0.99 * skyRadianceScale + sunColor.r * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudG = cloudLight * cloudShade * 1.02 * skyRadianceScale + sunColor.g * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
+        const cloudB = cloudLight * cloudShade * 1.06 * skyRadianceScale + sunColor.b * Math.pow(dotSun, 3) * params.cloudSun * 0.025;
         const overcastK = params.overcast * 0.8;
         const grey = 0.42 * (0.35 + skyMix * 0.25) * skyRadianceScale;
         c.lerp(cloudColor.set(grey, grey * 1.07, grey * 1.14), overcastK);

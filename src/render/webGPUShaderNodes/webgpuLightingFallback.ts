@@ -105,8 +105,15 @@ export function applyWebGPULightingFallback(
       const sideFacingFill = float(1).add(
         smoothstep(0.2, 0.85, verticality).mul(verticalFillNode),
       );
-      // Raise minimum albedo floor and fill intensity to prevent near-black surfaces
-      const fill = albedo.max(vec3(0.28, 0.32, 0.38)) // Raised from (0.16, 0.18, 0.2)
+      // The constant albedo floor keeps non-facade props from going near-black, but it also
+      // replaces every albedo channel below it with the same flat value. Facade wall textures
+      // (brick, mortar, dark glass) sit mostly under that floor, so the unshadowed emissive fill
+      // erased their variation and tinted them blue-grey. Materials that author their own albedo
+      // detail opt out with userData.webgpuAmbientFloor = false so the fill stays proportional
+      // to the albedo, as a diffuse ambient term should be.
+      const useAlbedoFloor = material.userData?.webgpuAmbientFloor !== false;
+      const fillAlbedo = useAlbedoFloor ? albedo.max(vec3(0.28, 0.32, 0.38)) : albedo;
+      const fill = fillAlbedo
         .mul(ambientFillNode)
         .mul(materialFillScale)
         .mul(sideFacingFill);

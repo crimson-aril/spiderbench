@@ -1089,8 +1089,10 @@ export class N8AONode extends TempNode {
         const screenSpaceRadiusNode = this.screenSpaceRadiusNode;
         const aoSamples = this.configuration.aoSamples;
         const halfRes = this.configuration.halfRes;
-        // --- PROJECT CHANGE START: reverse depth clears to 0; standard depth clears to 1. ---
-        const backgroundDepth = this.configuration.depthBufferType === DepthType.Reverse ? 0 : 1;
+        // --- PROJECT CHANGE START: handle either renderer depth convention. ---
+        const reversedDepth = this.configuration.depthBufferType === DepthType.Reverse;
+        // Reverse depth clears to 0; standard depth clears to 1.
+        const backgroundDepth = reversedDepth ? 0 : 1;
         // --- PROJECT CHANGE END ---
 
         return Fn(() => {
@@ -1236,22 +1238,36 @@ export class N8AONode extends TempNode {
 
                         If(isInside, () => {
                             const sampleDepth = aoDepthNode.sample(sampleUv).x.toVar();
+                            // --- PROJECT CHANGE START: linearize both depth conventions. ---
                             const distSample = orthoNode
                                 .select(
-                                    cameraNear.add(sampleDepth.mul(farMinusNear)),
-                                    farTimesNear.div(
-                                        cameraFar.sub(sampleDepth.mul(farMinusNear)),
-                                    ),
+                                    reversedDepth
+                                        ? cameraFar.sub(sampleDepth.mul(farMinusNear))
+                                        : cameraNear.add(sampleDepth.mul(farMinusNear)),
+                                    reversedDepth
+                                        ? farTimesNear.div(
+                                            cameraNear.add(sampleDepth.mul(farMinusNear)),
+                                        )
+                                        : farTimesNear.div(
+                                            cameraFar.sub(sampleDepth.mul(farMinusNear)),
+                                        ),
                                 )
                                 .toVar();
                             const distWorld = orthoNode
                                 .select(
-                                    cameraNear.add(sampleScreenDepth.mul(farMinusNear)),
-                                    farTimesNear.div(
-                                        cameraFar.sub(sampleScreenDepth.mul(farMinusNear)),
-                                    ),
+                                    reversedDepth
+                                        ? cameraFar.sub(sampleScreenDepth.mul(farMinusNear))
+                                        : cameraNear.add(sampleScreenDepth.mul(farMinusNear)),
+                                    reversedDepth
+                                        ? farTimesNear.div(
+                                            cameraNear.add(sampleScreenDepth.mul(farMinusNear)),
+                                        )
+                                        : farTimesNear.div(
+                                            cameraFar.sub(sampleScreenDepth.mul(farMinusNear)),
+                                        ),
                                 )
                                 .toVar();
+                            // --- PROJECT CHANGE END ---
 
                             const rangeCheck = smoothstep(
                                 0,
@@ -1402,7 +1418,9 @@ export class N8AONode extends TempNode {
                             dot(sampleViewPosition.sub(viewPosition), normal),
                         ).toVar();
                         const rangeCheck = sampleDepth
-                            .notEqual(1)
+                            // --- PROJECT CHANGE START: use this depth mode's clear value. ---
+                            .notEqual(backgroundDepth)
+                            // --- PROJECT CHANGE END ---
                             .select(
                                 exp(tangentPlaneDistance.negate().mul(invDistance)).mul(
                                     max(dot(normal, sampleNormal), 0),
