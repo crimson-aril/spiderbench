@@ -2,7 +2,6 @@
 import * as TSL from "three/tsl";
 import * as WEBGPU from "three/webgpu";
 import { nightK } from "../../render/daynight.ts";
-import { createWebGPUEnvironmentReflection } from "../../render/webGPUShaderNodes/environmentReflection.ts";
 
 const facadeNodeData = new WeakMap();
 
@@ -190,16 +189,18 @@ export function createFacadeNodeMaterial(T) {
   wallColor = TSL.mix(wallColor, TSL.vec3(0.035, 0.04, 0.05), crownGlass);
   const wallCrownColor = wallColor;
 
-  // Sample the WebGPU sky texture directly along the reflected world-space
-  // ray so facade glass keeps a live reflection even before SSR is composited.
+  // The WebGPU probe renders the facade black when the CPU-baked equirectangular
+  // sky sample is attached to this emissive graph, but renders when emission is
+  // replaced by the lighting fill. Use a restrained analytic sky tint instead;
+  // the PBR material still handles direct lighting and this only lifts glass.
   const viewDirection = TSL.normalize(TSL.cameraPosition.sub(worldPosition));
   const grazing = TSL.float(1).sub(TSL.abs(TSL.dot(worldNormal, viewDirection))).clamp();
-  const environmentReflection = createWebGPUEnvironmentReflection();
-  const glassReflection = environmentReflection
+  const analyticSkyTint = TSL.vec3(0.18, 0.27, 0.4);
+  const glassReflection = analyticSkyTint
     .mul(TSL.float(0.1).add(grazing.mul(0.42)))
     .mul(glassMask)
     .add(
-      environmentReflection
+      analyticSkyTint
         .mul(TSL.float(0.14).add(grazing.mul(0.48)))
         .mul(crownGlass),
     )
