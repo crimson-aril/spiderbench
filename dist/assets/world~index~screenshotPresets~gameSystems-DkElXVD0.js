@@ -1,0 +1,2 @@
+import{$r as e,_r as t,ft as n}from"./three~index~combat~tslPipeline~screenshotPresets~gameSystems~GLTFLoader-B3xvqeNo.js";function r(r,i){let a=new n(new Uint8Array(r),1,1,e);return a.name=i,a.colorSpace=``,a.minFilter=t,a.magFilter=t,a.generateMipmaps=!1,a.needsUpdate=!0,a}export{r as t};
+//# sourceMappingURL=world~index~screenshotPresets~gameSystems-DkElXVD0.js.map

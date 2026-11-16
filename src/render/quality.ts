@@ -1,0 +1,352 @@
+// Quality presets selected with ?q=low|med|high. GPUs limited to
+// 16 fragment texture units use the low preset by default; an explicit ?q= still wins.
+type QualityPresetName = "low" | "med" | "high";
+
+type QualitySettings = {
+  name: QualityPresetName;
+  lodScale: number;
+  renderLodScale: number;
+  baseLodScale?: number;
+  populationScale: number;
+  renderScale: number;
+  trafficRadius: number;
+  parkedCarRadius: number;
+  vehicleHighDetailDistance: number;
+  vehicleLowDetailDistance: number;
+  highwayTrafficRadius: number;
+  cascades: number;
+  shadowMapSize: number;
+  shadowFar: number;
+  splits: number[];
+  shadowTaps: number;
+  ao: boolean;
+  aoHalfRes: boolean;
+  aoQuality: string;
+  cloudSteps: number;
+  cloudLightSteps: number;
+  envSize: number;
+  taa: boolean;
+  bloomLevels: number;
+  dofTaps: number;
+  motionBlurSamples: number;
+  sharpen: number;
+  charShadow: number;
+  ssr: boolean;
+  ssrSteps?: number;
+  shafts: boolean;
+  shaftSteps: number;
+  ssgi: boolean;
+  ssgiDirs?: number;
+  ssgiSteps?: number;
+  wet: boolean;
+  perf?: boolean;
+  [key: string]: string | number | boolean | number[] | undefined;
+};
+
+type RendererCapabilitiesLike = {
+  isWebGPURenderer?: boolean;
+  capabilities?: { maxTextures?: number };
+  backend?: {
+    isWebGPUBackend?: boolean;
+    device?: { limits?: { maxTextureDimension2D?: number } };
+  };
+};
+
+type RenderPixelRatioViewport = { width: number; height: number };
+
+const requestedRenderScales = new WeakMap<object, number>();
+
+function clampWebGPUPixelRatio(
+  renderer: RendererCapabilitiesLike | null,
+  pixelRatio: number,
+  viewport: RenderPixelRatioViewport,
+): number {
+  if (renderer?.backend?.isWebGPUBackend !== true) return pixelRatio;
+
+  const maxTextureDimension = renderer.backend.device?.limits?.maxTextureDimension2D;
+  const largestCssDimension = Math.max(viewport.width, viewport.height);
+  if (
+    typeof maxTextureDimension !== "number" ||
+    !Number.isFinite(maxTextureDimension) ||
+    maxTextureDimension <= 0 ||
+    largestCssDimension <= 0
+  ) {
+    return pixelRatio;
+  }
+
+  // Leave a little headroom for integer rounding and render targets derived
+  // from the swapchain size. WebGPU rejects textures larger than this limit.
+  const safePixelRatio = (maxTextureDimension * 0.98) / largestCssDimension;
+  return Math.min(pixelRatio, safePixelRatio);
+}
+
+function getRequestedRenderPixelRatio(
+  renderer: RendererCapabilitiesLike | null,
+  renderScale: number,
+): number {
+  const presetScale = getQuality(renderer).renderScale;
+  const currentDevicePixelRatio =
+    typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+  const maxTextures = renderer?.capabilities?.maxTextures;
+  const maxRenderPixelRatio = maxTextures != null && maxTextures <= 16 ? 0.8 : 1.5;
+  return Math.min(currentDevicePixelRatio, maxRenderPixelRatio) * presetScale * renderScale;
+}
+
+const QUALITY_PRESETS: Record<QualityPresetName, QualitySettings> = {
+  low: {
+    name: "low",
+    lodScale: 0.2,
+    renderLodScale: 1,
+    renderScale: 0.55,
+    populationScale: 0.25,
+    trafficRadius: 110,
+    parkedCarRadius: 80,
+    vehicleHighDetailDistance: 8,
+    vehicleLowDetailDistance: 32,
+    highwayTrafficRadius: 350,
+    cascades: 1,
+    shadowMapSize: 512,
+    shadowFar: 260,
+    splits: [0.1, 260],
+    shadowTaps: 3,
+    ao: false,
+    aoHalfRes: true,
+    aoQuality: "Performance",
+    cloudSteps: 8,
+    cloudLightSteps: 1,
+    envSize: 64,
+    // Low still needs temporal accumulation to resolve subpixel edges and the
+    // city's dithered LOD fades; skipping it makes those details shimmer.
+    taa: true,
+    bloomLevels: 1,
+    dofTaps: 8,
+    motionBlurSamples: 0,
+    // At the low internal resolution, final-pass sharpening creates a light halo around high-contrast silhouettes.
+    sharpen: 0,
+    // Keep a small player-only cascade in Low so feet and roof contact do not look detached.
+    charShadow: 512,
+    ssr: false,
+    shafts: false,
+    shaftSteps: 0,
+    ssgi: false,
+    wet: false, // (lighting2 r1)
+  },
+  med: {
+    name: "med",
+    lodScale: 0.72,
+    renderLodScale: 1,
+    renderScale: 0.85,
+    populationScale: 0.5,
+    trafficRadius: 460,
+    parkedCarRadius: 360,
+    vehicleHighDetailDistance: 35,
+    vehicleLowDetailDistance: 166,
+    highwayTrafficRadius: 1000,
+    cascades: 3,
+    shadowMapSize: 2048,
+    shadowFar: 900,
+    splits: [0.1, 18, 90, 900],
+    shadowTaps: 8,
+    ao: true,
+    // Full-resolution AO avoids bright upsample halos along the player silhouette.
+    // pipeline.ts uses four AO and denoise samples on this path to keep its cost low.
+    aoHalfRes: false,
+    aoQuality: "Low",
+    cloudSteps: 16,
+    cloudLightSteps: 3,
+    envSize: 128,
+    taa: true,
+    bloomLevels: 6,
+    dofTaps: 22,
+    motionBlurSamples: 8,
+    sharpen: 0.3,
+    charShadow: 1024,
+    ssr: true,
+    ssrSteps: 20,
+    shafts: true,
+    shaftSteps: 12,
+    ssgi: true,
+    ssgiDirs: 4,
+    ssgiSteps: 4,
+    wet: true, // (lighting2 r1)
+  },
+  high: {
+    name: "high",
+    lodScale: 1,
+    renderLodScale: 1,
+    renderScale: 1,
+    populationScale: 1,
+    trafficRadius: 640,
+    parkedCarRadius: 500,
+    vehicleHighDetailDistance: 48,
+    vehicleLowDetailDistance: 230,
+    highwayTrafficRadius: 1400,
+    // (foundation agent: a 5th, half-res cascade reaches 3 km so aerial views keep building / street-canyon shadows)
+    cascades: 5,
+    shadowMapSize: 2048,
+    shadowFar: 3000,
+    splits: [0.1, 14, 50, 200, 800, 3000],
+    shadowTaps: 10,
+    ao: true,
+    aoHalfRes: false,
+    aoQuality: "Medium",
+    cloudSteps: 22,
+    cloudLightSteps: 3,
+    envSize: 128,
+    taa: true,
+    bloomLevels: 6,
+    dofTaps: 43,
+    motionBlurSamples: 10,
+    sharpen: 0.35,
+    charShadow: 2048,
+    ssr: true,
+    ssrSteps: 28,
+    shafts: true,
+    shaftSteps: 16,
+    ssgi: true,
+    ssgiDirs: 6,
+    ssgiSteps: 4,
+    wet: true, // (lighting2 r1) SSGI + wet-patch roughness
+  },
+};
+
+let cachedQualitySettings: QualitySettings | null = null;
+let cachedBaseQualitySettings: QualitySettings | null = null;
+const RENDER_LOD_DISTANCE_KEYS = [
+  "trafficRadius",
+  "parkedCarRadius",
+  "vehicleHighDetailDistance",
+  "vehicleLowDetailDistance",
+  "highwayTrafficRadius",
+] as const;
+
+function readSavedRenderScale(): number {
+  try {
+    const save = JSON.parse(
+      localStorage.getItem("spiderbench.save.v1") || "null",
+    );
+    const scale = Number(save?.settings?.renderScale);
+    if (Number.isFinite(scale)) return Math.min(1.25, Math.max(0.35, scale));
+  } catch {}
+  return 1;
+}
+
+let renderLodScale = readSavedRenderScale();
+
+function applyRenderLodScale() {
+  if (!cachedQualitySettings || !cachedBaseQualitySettings) return;
+  const quality = cachedQualitySettings;
+  const base = cachedBaseQualitySettings;
+  // Presets already provide their own LOD and traffic budgets. Apply only the
+  // user's resolution multiplier here; multiplying by the preset's renderScale
+  // as well made Low shorten all visibility distances a second time.
+  const effectiveLodScale = renderLodScale;
+  quality.renderLodScale = effectiveLodScale;
+  quality.baseLodScale = base.lodScale;
+  quality.lodScale = base.lodScale * effectiveLodScale;
+  for (const key of RENDER_LOD_DISTANCE_KEYS)
+    quality[key] = Number(base[key]) * effectiveLodScale;
+}
+
+// Called by the graphics settings as the render-resolution slider moves. World LODs
+// use this multiplier too, so reducing pixels also shortens detail and simulation ranges.
+export function setRenderLodScale(scale: number) {
+  if (!Number.isFinite(scale)) return;
+  const next = Math.min(1.25, Math.max(0.35, scale));
+  if (next === renderLodScale) return;
+  renderLodScale = next;
+  applyRenderLodScale();
+}
+
+export function getQuality(
+  renderer: RendererCapabilitiesLike | null = null,
+): QualitySettings {
+  if (cachedQualitySettings) return cachedQualitySettings;
+  const maxTextures = renderer?.capabilities?.maxTextures;
+  let name: QualityPresetName;
+  if (maxTextures != null) name = maxTextures <= 16 ? "low" : "high";
+  else if (renderer?.isWebGPURenderer) {
+    // WebGPU deliberately does not expose VRAM size. Use the browser's coarse
+    // system-memory hint only as a starting point; the graphics menu and ?q=
+    // override remain authoritative for shared-memory and older GPUs.
+    const memory =
+      typeof navigator !== "undefined" ? (navigator as any).deviceMemory : 8;
+    name = memory <= 4 ? "low" : memory <= 8 ? "med" : "high";
+  } else name = "high";
+  try {
+    const requestedPresetParam = new URLSearchParams(location.search).get("q");
+    const requestedPreset =
+      requestedPresetParam === "medium" ? "med" : requestedPresetParam;
+    if (
+      requestedPreset === "low" ||
+      requestedPreset === "med" ||
+      requestedPreset === "high"
+    ) {
+      name = requestedPreset;
+    }
+  } catch (e) {
+    /* non-browser */
+  }
+  cachedQualitySettings = { ...QUALITY_PRESETS[name] };
+  // (perf) ?perfoff disables the perf agent's culling / batching changes (A/B measurements with tools/perf_probe.mjs)
+  try {
+    cachedQualitySettings.perf = !new URLSearchParams(location.search).has(
+      "perfoff",
+    );
+  } catch (e) {
+    cachedQualitySettings.perf = true;
+  }
+  // (perf r2) ?qset=ao:0,ssr:0,shadowMapSize:1024 overrides single preset fields (GPU ablation with tools/perf_probe.mjs)
+  try {
+    const qualityOverrides = new URLSearchParams(location.search).get("qset");
+    if (qualityOverrides) {
+      for (const override of qualityOverrides.split(",")) {
+        const [settingName, settingValue] = override.split(":");
+        if (settingName === undefined || settingValue === undefined) continue;
+        if (!(settingName in cachedQualitySettings)) continue;
+
+        const numericValue = Number(settingValue);
+        const parsedValue =
+          settingValue === "true"
+            ? true
+            : settingValue === "false"
+              ? false
+              : Number.isNaN(numericValue)
+                ? settingValue
+                : numericValue;
+        cachedQualitySettings[settingName] = parsedValue;
+      }
+    }
+  } catch (e) {
+    /* non-browser */
+  }
+  cachedBaseQualitySettings = { ...cachedQualitySettings };
+  applyRenderLodScale();
+  return cachedQualitySettings;
+}
+
+// Retina displays can multiply the render targets' pixel count by 2.25 at 1.5x DPR.
+// Presets scale internal resolution; 16-texture-unit GPUs cap it at 80%, then renderScale applies as a user multiplier.
+export function getRenderPixelRatio(
+  renderer: RendererCapabilitiesLike | null,
+  renderScale = 1,
+): number {
+  if (renderer && typeof renderer === "object") {
+    requestedRenderScales.set(renderer, renderScale);
+  }
+  const requestedPixelRatio = getRequestedRenderPixelRatio(renderer, renderScale);
+  const viewport = {
+    width: typeof innerWidth === "number" ? innerWidth : 0,
+    height: typeof innerHeight === "number" ? innerHeight : 0,
+  };
+  return clampWebGPUPixelRatio(renderer, requestedPixelRatio, viewport);
+}
+
+export function getResizedRenderPixelRatio(
+  renderer: RendererCapabilitiesLike,
+  viewport: RenderPixelRatioViewport,
+): number {
+  const renderScale = requestedRenderScales.get(renderer) ?? 1;
+  const requestedPixelRatio = getRequestedRenderPixelRatio(renderer, renderScale);
+  return clampWebGPUPixelRatio(renderer, requestedPixelRatio, viewport);
+}
